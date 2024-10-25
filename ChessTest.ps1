@@ -155,6 +155,7 @@ class MoveCache
         $moveKey = $this.GetMoveKey($FromPosition, $TargetPosition)
         return $this.cachedMoves.ContainsKey($moveKey)
     }
+    
 }
 #Pieces
 
@@ -179,7 +180,7 @@ class Pawn : PieceTypeBase
         {
             $moves = [System.Collections.Generic.List[Position]]::new()
             $moves.Add([Position]::new($from.X, $($from.Y + $MovementDirection)))
-            if(($allegiance -eq [Allegiance]::White -and $from.Y -eq 6) -or ($allegiance -eq [Allegiance]::Black -and $from.Y -eq 2))
+            if(($allegiance -eq [Allegiance]::White -and $from.Y -eq 6) -or ($allegiance -eq [Allegiance]::Black -and $from.Y -eq 1))
             {
                 if ($board[$from.X, $($from.Y + $($MovementDirection * 2))].OccupantAllegiance -eq [Allegiance]::None)
                 {
@@ -240,7 +241,7 @@ class Knight : PieceTypeBase
     static [CompositeRule]$PieceRules = [CompositeRule]::new(@([DirectionalRule]::new(2,1,$false),[DirectionalRule]::new(2,-1,$false),
     [DirectionalRule]::new(-2,1,$false),[DirectionalRule]::new(-2,-1,$false),
             [DirectionalRule]::new(1,2,$false),[DirectionalRule]::new(1,-2,$false),
-            [DirectionalRule]::new(-1,2,$false),[DirectionalRule]::new(-2,-2,$false)));
+            [DirectionalRule]::new(-1,2,$false),[DirectionalRule]::new(-1,-2,$false)));
 }
 
 class Bishop : PieceTypeBase
@@ -287,13 +288,13 @@ class Tile
 {
     [System.Type]$OccupantPiece
     [Allegiance]$OccupantAllegiance;
-    [char]$BackChar;
+    [bool]$IsWhiteTile;
 
     Tile($NewOccupantType,$NewOccupantAllegiance,$NewBackIsWhite)
     {
         $this.OccupantPiece = $NewOccupantType;
         $this.OccupantAllegiance = $NewOccupantAllegiance;
-        $this.BackChar = $(If($NewBackIsWhite){'□'} Else {'■'});
+        $this.IsWhiteTile = $NewBackIsWhite;
     }
 
     [bool] CheckCanMoveTo([Position]$FromPos,[Position]$ToPos,$Tiles,$MoveCache)
@@ -308,14 +309,14 @@ class Tile
 
     [char] GetIcon()
     {
-        $returnVal = '#';
-        switch([int]$this.OccupantAllegiance)
+        if($this.OccupantAllegiance -eq [Allegiance]::None)
         {
-            ([int][Allegiance]::White) {$returnVal = [char]$([int]([char]$this.OccupantPiece::pieceIcon)+6); break;}
-            ([int][Allegiance]::Black) {$returnVal = $this.OccupantPiece::pieceIcon; break;}
-            ([int][Allegiance]::None) {$returnVal = $this.BackChar; break;}
+            return ' '
         }
-        return $returnVal;
+        else
+        {
+            return $this.OccupantPiece::pieceIcon
+        }
     }
 
     [bool] MovePiece([Position]$FromPos,[Position]$ToPos,$Tiles,$MoveCache)
@@ -355,10 +356,10 @@ function GenerateBaseGrid($Tiles)
     }
 }
 
-function ParseNotation([string]$notation,[ref]$ToPos,[ref]$FromPos,[ref]$TargetPiece)
+function ParseNotation([string]$notation,[ref]$ToPos,[ref]$FromPos,[ref]$TargetPiece,[ref]$IsMoveCheck)
 {
     #notation to check if valid move
-    if($($notation -match "([KQRBN])?([a-h])([1-8])([a-h])([1-8])"))
+    if($($notation -match "([KQRBN])?([abcdefgh?])([12345678])([abcdefgh?])([12345678?])"))
     {
         switch($Matches[1])
         {
@@ -369,50 +370,65 @@ function ParseNotation([string]$notation,[ref]$ToPos,[ref]$FromPos,[ref]$TargetP
             "N" {$TargetPiece.Value = [Knight];break;}
             "" {$TargetPiece.Value = [Pawn];break;}
         }
+        
         $FromPos.Value.X = [char]($Matches[2]) % 97; #X values are alphabetical, % 97 returns their position in the alphabet zero indexed
         $FromPos.Value.Y = 7 - ($Matches[3] - 1);
-        $ToPos.Value.X = [char]($Matches[4]) % 97; #X values are alphabetical, % 97 returns their position in the alphabet zero indexed
-        $ToPos.Value.Y = 7 - ($Matches[5] - 1);
-        return $true;
+        
+        if($Matches[4] -eq "?") #Check Moves Call
+        {
+            $ToPos.Value.X = 0 
+            $ToPos.Value.Y = 0
+            $IsMoveCheck.Value = $true
+        }
+        else
+        {
+            $ToPos.Value.X = [char]($Matches[4]) % 97 #X values are alphabetical, % 97 returns their position in the alphabet zero indexed
+            $ToPos.Value.Y = 7 - ($Matches[5] - 1)
+            $IsMoveCheck.Value = $false
+        }
+        return $true
     }
     else
     {
-        return $false;
+        return $false
     }
 
 }
 
 
-[Tile[,]]$Grid = New-Object 'Tile[,]' 8,8;
+[Tile[,]]$Grid = New-Object 'Tile[,]' 8,8
 
-GenerateBaseGrid $Grid;
+GenerateBaseGrid $Grid
 $moveCache = [MoveCache]::new()
 
-
-$continue = $true;
-$whitesTurn = $true;
+$continue = $true
+$whitesTurn = $true
 
 while($continue)
 {
+    Clear-Host
     $moveCache.UpdateCache($(If($whitesTurn){[Allegiance]::White}else{[Allegiance]::Black}),$Grid)
     
-    echo $(If($whitesTurn) {"Whites Turn"} Else {"Blacks Turn"});
-    $output = "  a  b  c  d  e  f  g  h  `n";
+    Write-Host $(If($whitesTurn) {"Whites Turn"} Else {"Blacks Turn"});
+    Write-Host " a b c d e f g h ";
 
     For ($y = 0; $y -le 7;$y++)
     {
-        $output += [Math]::Abs($y-8);
+        Write-Host $([Math]::Abs($y-8)) -NoNewLine
         For ($x = 0; $x -le 7;$x++)
         {
-            $output += " " + $Grid[$x,$y].GetIcon() + " ";
+            $output = $Grid[$x,$y].GetIcon() + " "
+            [System.ConsoleColor]$colour = $(If($Grid[$x,$y].IsWhiteTile){[System.ConsoleColor]::DarkYellow}else{[System.ConsoleColor]::DarkRed})
+            [System.ConsoleColor]$pieceColour = $(If($Grid[$x,$y].OccupantAllegiance -eq [Allegiance]::White){[System.ConsoleColor]::White}else{[System.ConsoleColor]::Black})
+            Write-Host $output -NoNewLine -BackgroundColor $colour -ForegroundColor $pieceColour
         }
-        $output += "`n";
+        Write-Host " "
     }
-
-    echo $output;
+    
 
     while($true)
     {
+        Write-Host " "
         $Move = Read-Host "Enter Move";
 
         if($Move -eq "exit")
@@ -427,17 +443,47 @@ while($continue)
             #Current Position
             [Position]$currentPosition = [Position]::new(0,0)
             #Expected Piece
-            $selectedTargetPiece = $null;
-            if(ParseNotation $Move ([ref]$selectedTarget) ([ref]$currentPosition) ([ref]$selectedTargetPiece))
+            $selectedTargetPiece = $null
+            #If Move Query
+            [bool]$IsMoveQuery = $null
+            if(ParseNotation $Move ([ref]$selectedTarget) ([ref]$currentPosition) ([ref]$selectedTargetPiece) ([ref]$IsMoveQuery))
             {
-                if($Grid[$currentPosition.X,$currentPosition.Y].MovePiece($currentPosition,$selectedTarget,$Grid,$moveCache))
+                #TODO allow checking 
+                if($IsMoveQuery -and $Grid[$currentPosition.X, $currentPosition.Y].OccupantAllegiance -eq $(If($whitesTurn){[Allegiance]::White}else{[Allegiance]::Black}))
                 {
-                    $whitesTurn = -not $whitesTurn;
-                    break;
+                    Clear-Host
+                    Write-Host $(If($whitesTurn) {"Whites Turn"} Else {"Blacks Turn"});
+                    Write-Host " a b c d e f g h "
+                    For ($y = 0; $y -le 7;$y++)
+                    {
+                        Write-Host $([Math]::Abs($y-8)) -NoNewLine
+                        For ($x = 0; $x -le 7;$x++)
+                        {
+                            [System.ConsoleColor]$colour = $(If($moveCache.IsValidMove($currentPosition,[Position]::new($x,$y))) {
+                                [System.ConsoleColor]::Blue
+                            } else {
+                                If($Grid[$x,$y].IsWhiteTile){[System.ConsoleColor]::DarkYellow}else{[System.ConsoleColor]::DarkRed}
+                            })
+                            [System.ConsoleColor]$pieceColour = $(If($Grid[$x,$y].OccupantAllegiance -eq [Allegiance]::White){[System.ConsoleColor]::White}else{[System.ConsoleColor]::Black})
+                            $output = $Grid[$x,$y].GetIcon() + " "
+                            Write-Host $output -NoNewLine -BackgroundColor $colour -ForegroundColor $pieceColour
+                            
+                        }
+                        Write-Host " "
+
+                    }
                 }
                 else
                 {
-                    echo "Invalid Move";
+                    if ($Grid[$currentPosition.X, $currentPosition.Y].MovePiece($currentPosition, $selectedTarget, $Grid, $moveCache))
+                    {
+                        $whitesTurn = -not $whitesTurn;
+                        break;
+                    }
+                    else
+                    {
+                        echo "Invalid Move";
+                    }
                 }
             }
             else
