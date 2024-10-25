@@ -26,15 +26,30 @@ class Position {
     }
 }
 
+class MoveVsScore{
+    [Position]$Pos
+    [int]$ScoreChange
+
+    MoveVsScore()
+    {
+        
+    }
+
+    MoveVsScore([Position]$nPos,[int]$nScoreChange)
+    {
+        $this.Pos = $nPos
+        $this.ScoreChange = $nScoreChange
+    }
+}
+
 class IMoveRule {
-    [System.Collections.Generic.List[Position]] GetPossibleMoves([Position]$from, [Allegiance]$allegiance, $board) {
+    [System.Collections.Generic.List[MoveVsScore]] GetPossibleMoves([Position]$from, [Allegiance]$allegiance, $board) {
         throw "Must be implemented"
     }
 }
 
 #Movement Rules
 
-#Rules for checking a specific direction
 class DirectionalRule : IMoveRule
 {
     [int]$DirX
@@ -48,9 +63,9 @@ class DirectionalRule : IMoveRule
         $this.Repeating = $repeating;
     }
 
-    [System.Collections.Generic.List[Position]] GetPossibleMoves([Position]$from,[Allegiance]$myAllegiance,$board)
+    [System.Collections.Generic.List[MoveVsScore]] GetPossibleMoves([Position]$from,[Allegiance]$myAllegiance,$board)
     {
-        $moves = [System.Collections.Generic.List[Position]]::new();
+        $moves = [System.Collections.Generic.List[MoveVsScore]]::new()
         $x = $from.x + $this.DirX;
         $y = $from.y + $this.DirY;
         
@@ -61,12 +76,12 @@ class DirectionalRule : IMoveRule
             {
                 if($board[$x,$y].OccupantAllegiance -ne $myAllegiance)
                 {
-                    $moves.Add($pos)
+                    $moves.Add([MoveVsScore]::new($pos,$($board[$x,$y].GetTakingScore($myAllegiance))))
                 }
                 break;
             }
             
-            $moves.Add($pos)
+            $moves.Add([MoveVsScore]::new($pos,0))
             
             if(-not $this.Repeating)
             {
@@ -92,12 +107,12 @@ class SpecialRule : IMoveRule
         $this.MoveGenerator = $newMoveGen;
     }
 
-    [System.Collections.Generic.List[Position]] GetPossibleMoves([Position]$from, [string]$allegiance, $board) {
+    [System.Collections.Generic.List[MoveVsScore]] GetPossibleMoves([Position]$from, [string]$allegiance, $board) {
         if(& $this.Condition $from $allegiance $board) #& operator executes $this.Condition as a script using the parameters given
         {
             return & $this.MoveGenerator $from $allegiance $board
         }
-        return [System.Collections.Generic.List[Position]]::new();
+        return [System.Collections.Generic.List[MoveVsScore]]::new();
     }
 }
 
@@ -110,8 +125,8 @@ class CompositeRule : IMoveRule
         $this.Rules = $ComponentRules
     }
 
-    [System.Collections.Generic.List[Position]] GetPossibleMoves([Position]$from, [string]$allegiance, $board) {
-        $allMoves = [System.Collections.Generic.List[Position]]::new()
+    [System.Collections.Generic.List[MoveVsScore]] GetPossibleMoves([Position]$from, [string]$allegiance, $board) {
+        $allMoves = [System.Collections.Generic.List[MoveVsScore]]::new()
         foreach($rule in $this.Rules)
         {
             $moves = $rule.GetPossibleMoves($from,$allegiance,$board)
@@ -127,27 +142,65 @@ class CompositeRule : IMoveRule
 class MoveCache
 {
     [hashtable]$cachedMoves = @{}
+    [string]$AIMove
 
     hidden [string] GetMoveKey([Position]$from, [Position]$to) {
         return ($from.X) -bor ($from.Y -shl 3) -bor ($to.X -shl 6) -bor ($to.Y -shl 9)
     }
-    
+
+    # Parse a move key back into positions
+    hidden [bool] ParseMoveKey([int]$moveKey,[ref]$from,[ref]$to) {
+        # Extract values using masks
+        # 0x7 is binary 111 (3 bits)
+        $fromX = $moveKey -band 0x7          # First 3 bits
+        $fromY = ($moveKey -shr 3) -band 0x7 # Next 3 bits
+        $toX = ($moveKey -shr 6) -band 0x7   # Next 3 bits
+        $toY = ($moveKey -shr 9) -band 0x7   # Final 3 bits
+        
+        $from.Value = [Position]::new($fromX, $fromY)
+        $to.Value = [Position]::new($toX, $toY)
+        return $true
+    }
+
+
     [void] UpdateCache([Allegiance]$PlayerAllegiance,$Tiles)
     {
+        [System.Collections.Generic.List[string]]$BestMoves = @()
+        [int]$BestMoveScore = 0
+        
         $this.cachedMoves.Clear()
+        $this.AIMove = ""
         For ($y = 0; $y -le 7;$y++)
         {
             For ($x = 0; $x -le 7;$x++)
             {
                 if($PlayerAllegiance -ne $Tiles[$x,$y].OccupantAllegiance) {continue}
                 $CurrentPosition = [Position]::new($x,$y);
-                [System.Collections.Generic.List[Position]]$moves = $Tiles[$x,$y].GetMoves($CurrentPosition,$PlayerAllegiance,$Tiles)
+                [System.Collections.Generic.List[MoveVsScore]]$moves = $Tiles[$x,$y].GetMoves($CurrentPosition,$PlayerAllegiance,$Tiles)
                 foreach ($moveTarget in $moves)
                 {
-                    $this.cachedMoves[$this.GetMoveKey($CurrentPosition,$moveTarget)] = $true
+                    $moveScore = $moveTarget.ScoreChange
+                    $moveKey = $this.GetMoveKey($CurrentPosition,$moveTarget.Pos)
+                    $this.cachedMoves[$moveKey] = $moveScore
+                    
+                    if($moveScore -gt $BestMoveScore)
+                    {
+                        $BestMoves.Clear()
+                        $BestMoves.Add($moveKey)
+                        $BestMoveScore = $moveScore
+                    }
+                    else
+                    {
+                        if($moveScore -eq $BestMoveScore)
+                        {
+                            $BestMoves.Add($moveKey)
+                        }
+                    }
                 }
             }
         }
+        
+        $this.AIMove = $BestMoves | Get-Random
     }
     
     [bool] IsValidMove([Position]$FromPosition,[Position]$TargetPosition)
@@ -156,18 +209,25 @@ class MoveCache
         return $this.cachedMoves.ContainsKey($moveKey)
     }
     
+    [bool] GetAIMove([ref]$FromPosition,[ref]$TargetPosition)
+    {
+        return $this.ParseMoveKey($this.AIMove,$FromPosition,$TargetPosition)
+    }
+    
 }
 #Pieces
 
 class PieceTypeBase
 {
     static [char]$pieceIcon = 'N';
+    static [int]$pieceValue = 0;
     static [CompositeRule]$PieceRules = @{}
 }
 
 class Pawn : PieceTypeBase
 {
     static [char]$pieceIcon = '♙';
+    static [int]$pieceValue = 1;
     static [CompositeRule]$PieceRules = [CompositeRule]::new(@([SpecialRule]::new(
     {
         #pawn moves away from its own side and can move twice on first turn
@@ -178,49 +238,56 @@ class Pawn : PieceTypeBase
         $MovementDirection = $(If($allegiance -eq [Allegiance]::White) {-1} Else {1})
         if ($board[$from.X, $($from.Y + $MovementDirection)].OccupantAllegiance -eq [Allegiance]::None)
         {
-            $moves = [System.Collections.Generic.List[Position]]::new()
-            $moves.Add([Position]::new($from.X, $($from.Y + $MovementDirection)))
+            $moves = [System.Collections.Generic.List[MoveVsScore]]::new()
+            
+            $firstMove = [Position]::new($from.X, $($from.Y + $MovementDirection))
+            $moves.Add([MoveVsScore]::new($firstMove,$($Tiles[$from.X,$($from.Y + $MovementDirection)].GetTakingScore($allegiance))))
+            
             if(($allegiance -eq [Allegiance]::White -and $from.Y -eq 6) -or ($allegiance -eq [Allegiance]::Black -and $from.Y -eq 1))
             {
                 if ($board[$from.X, $($from.Y + $($MovementDirection * 2))].OccupantAllegiance -eq [Allegiance]::None)
                 {
-                    $moves.Add([Position]::new($from.X, $($from.Y + ($MovementDirection * 2))))
+                    $secondMove = [Position]::new($from.X, $($from.Y + $MovementDirection * 2))
+                    $moves.Add([MoveVsScore]::new($secondMove,$($Tiles[$from.X,$($MovementDirection * 2)].GetTakingScore($allegiance))))
                 }
             }
             return $moves
         }
-        return [System.Collections.Generic.List[Position]]::new()
+        return [System.Collections.Generic.List[MoveVsScore]]::new()
     }),[SpecialRule]::new( #Check right diagonal
-    { 
-    param($from, $allegiance, $board)
-    $MovementDirection = $(If($allegiance -eq [Allegiance]::White) {-1} Else {1})
-    $OppositeAllegiance = $(If($allegiance -eq [Allegiance]::White) {[Allegiance]::Black} Else {[Allegiance]::White})
-    $x = $from.X + 1 
-    $y = $from.Y + $MovementDirection
-    return $x -lt 8 -and $y -lt 8 -and $board[$x,$y].OccupantAllegiance -eq $OppositeAllegiance
-    },
-    {
-    param($from, $allegiance, $board)
-    $moves = [System.Collections.Generic.List[Position]]::new()
-    $MovementDirection = $(If($allegiance -eq [Allegiance]::White) {-1} Else {1})
-    $moves.Add([Position]::new($from.X + 1, $from.Y + $MovementDirection))
-    return $moves
-    }),[SpecialRule]::new( #Check left diagonal
-            {
-                param($from, $allegiance, $board)
-                $MovementDirection = $(If($allegiance -eq [Allegiance]::White) {-1} Else {1})
-                $OppositeAllegiance = $(If($allegiance -eq [Allegiance]::White) {[Allegiance]::Black} Else {[Allegiance]::White})
-                $x = $from.X - 1
-                $y = $from.Y + $MovementDirection
-                return $x -lt 8 -and $y -lt 8 -and $board[$x,$y].OccupantAllegiance -eq $OppositeAllegiance
-            },
-            {
-                param($from, $allegiance, $board)
-                $moves = [System.Collections.Generic.HashSet[Position]]::new()
-                $MovementDirection = $(If($allegiance -eq [Allegiance]::White) {-1} Else {1})
-                $moves.Add([Position]::new($from.X - 1, $from.Y + $MovementDirection))
-                return $moves
-            })
+        { 
+            param($from, $allegiance, $board)
+            $MovementDirection = $(If($allegiance -eq [Allegiance]::White) {-1} Else {1})
+            $OppositeAllegiance = $(If($allegiance -eq [Allegiance]::White) {[Allegiance]::Black} Else {[Allegiance]::White})
+            $x = $from.X + 1 
+            $y = $from.Y + $MovementDirection
+            return $x -lt 8 -and $y -lt 8 -and $board[$x,$y].OccupantAllegiance -eq $OppositeAllegiance
+        },
+        {
+            param($from, $allegiance, $board)
+            $moves = [System.Collections.Generic.List[MoveVsScore]]::new()
+            $MovementDirection = $(If($allegiance -eq [Allegiance]::White) {-1} Else {1})
+            $newPos = [Position]::new($($from.X + 1), $($from.Y + $MovementDirection))
+            $moves.Add([MoveVsScore]::new($newPos,$($board[$($from.X + 1), $($from.Y + $MovementDirection)].GetTakingScore($allegiance))))
+            return $moves
+        })
+        ,[SpecialRule]::new( #Check left diagonal
+        {
+            param($from, $allegiance, $board)
+            $MovementDirection = $(If($allegiance -eq [Allegiance]::White) {-1} Else {1})
+            $OppositeAllegiance = $(If($allegiance -eq [Allegiance]::White) {[Allegiance]::Black} Else {[Allegiance]::White})
+            $x = $from.X - 1
+            $y = $from.Y + $MovementDirection
+            return $x -lt 8 -and $y -lt 8 -and $board[$x,$y].OccupantAllegiance -eq $OppositeAllegiance
+        },
+        {
+            param($from, $allegiance, $board)
+            $moves = [System.Collections.Generic.List[MoveVsScore]]::new()
+            $MovementDirection = $(If($allegiance -eq [Allegiance]::White) {-1} Else {1})
+            $newPos = [Position]::new($($from.X - 1), $($from.Y + $MovementDirection))
+            $moves.Add([MoveVsScore]::new($newPos,$($board[$($from.X - 1), $($from.Y + $MovementDirection)].GetTakingScore($allegiance))))
+            return $moves
+        })
     ))
     
     #TODO ADD EN PASSANT
@@ -229,6 +296,7 @@ class Pawn : PieceTypeBase
 class Rook : PieceTypeBase
 {
     static [char]$pieceIcon = '♖';
+    static [int]$pieceValue = 5;
     static [CompositeRule]$PieceRules = [CompositeRule]::new(@([DirectionalRule]::new(1,0,$true),[DirectionalRule]::new(-1,0,$true),
     [DirectionalRule]::new(0,1,$true),[DirectionalRule]::new(0,-1,$true)));
     
@@ -238,6 +306,7 @@ class Rook : PieceTypeBase
 class Knight : PieceTypeBase
 {
     static [char]$pieceIcon = '♘';
+    static [int]$pieceValue = 3;
     static [CompositeRule]$PieceRules = [CompositeRule]::new(@([DirectionalRule]::new(2,1,$false),[DirectionalRule]::new(2,-1,$false),
     [DirectionalRule]::new(-2,1,$false),[DirectionalRule]::new(-2,-1,$false),
             [DirectionalRule]::new(1,2,$false),[DirectionalRule]::new(1,-2,$false),
@@ -247,6 +316,7 @@ class Knight : PieceTypeBase
 class Bishop : PieceTypeBase
 {
     static [char]$pieceIcon = '♗';
+    static [int]$pieceValue = 3;
     static [CompositeRule]$PieceRules = [CompositeRule]::new(@([DirectionalRule]::new(1,1,$true),[DirectionalRule]::new(1,-1,$true),
     [DirectionalRule]::new(-1,1,$true),[DirectionalRule]::new(-1,-1,$true)));
 }
@@ -254,6 +324,7 @@ class Bishop : PieceTypeBase
 class King : PieceTypeBase
 {
     static [char]$pieceIcon = '♔';
+    static [int]$pieceValue = 1000;
     static [CompositeRule]$PieceRules = [CompositeRule]::new(@(
         [DirectionalRule]::new(1, 0, $false),
         [DirectionalRule]::new(-1, 0, $false),
@@ -272,6 +343,7 @@ class King : PieceTypeBase
 class Queen : PieceTypeBase
 {
     static [char]$pieceIcon = '♕';
+    static [int]$pieceValue = 9;
     static [CompositeRule]$PieceRules = [CompositeRule]::new(@(
         [DirectionalRule]::new(1, 0, $true),
         [DirectionalRule]::new(-1, 0, $true),
@@ -302,9 +374,21 @@ class Tile
         return $this.OccupantAllegiance -ne [Allegiance]::None -and $MoveCache.IsValidMove($FromPos,$ToPos);
     }
 
-    [System.Collections.Generic.List[Position]] GetMoves([Position]$from, [Allegiance]$allegiance, $board)
+    [System.Collections.Generic.List[MoveVsScore]] GetMoves([Position]$from, [Allegiance]$allegiance, $board)
     {
         return $this.OccupantPiece::PieceRules.GetPossibleMoves([Position]$from, [string]$allegiance, $board)
+    }
+    
+    [int] GetTakingScore([Allegiance]$senderAllegiance)
+    {
+        if($this.OccupantAllegiance -ne [Allegiance]::None)
+        {
+            if($this.OccupantAllegiance -ne $senderAllegiance)
+            {
+                return $this.OccupantPiece::pieceValue;
+            }
+        }
+        return 0;
     }
 
     [char] GetIcon()
@@ -409,7 +493,7 @@ while($continue)
     Clear-Host
     $moveCache.UpdateCache($(If($whitesTurn){[Allegiance]::White}else{[Allegiance]::Black}),$Grid)
     
-    Write-Host $(If($whitesTurn) {"Whites Turn"} Else {"Blacks Turn"});
+    Write-Host $(If($whitesTurn) {"Your Turn"} Else {"Enemy Turn"});
     Write-Host " a b c d e f g h ";
 
     For ($y = 0; $y -le 7;$y++)
@@ -425,71 +509,110 @@ while($continue)
         Write-Host " "
     }
     
-
-    while($true)
+    if($whitesTurn)
     {
-        Write-Host " "
-        $Move = Read-Host "Enter Move";
+        while ($true)
+        {
+            Write-Host " "
+            $Move = Read-Host "Enter Move";
 
-        if($Move -eq "exit")
-        {
-            $continue = $false;
-            break;
-        }
-        else
-        {
-            #Target for movement
-            [Position]$selectedTarget = [Position]::new(0,0)
-            #Current Position
-            [Position]$currentPosition = [Position]::new(0,0)
-            #Expected Piece
-            $selectedTargetPiece = $null
-            #If Move Query
-            [bool]$IsMoveQuery = $null
-            if(ParseNotation $Move ([ref]$selectedTarget) ([ref]$currentPosition) ([ref]$selectedTargetPiece) ([ref]$IsMoveQuery))
+            if ($Move -eq "exit")
             {
-                #TODO allow checking 
-                if($IsMoveQuery -and $Grid[$currentPosition.X, $currentPosition.Y].OccupantAllegiance -eq $(If($whitesTurn){[Allegiance]::White}else{[Allegiance]::Black}))
+                $continue = $false;
+                break;
+            }
+            else
+            {
+                #Target for movement
+                [Position]$selectedTarget = [Position]::new(0, 0)
+                #Current Position
+                [Position]$currentPosition = [Position]::new(0, 0)
+                #Expected Piece
+                $selectedTargetPiece = $null
+                #If Move Query
+                [bool]$IsMoveQuery = $null
+                if (ParseNotation $Move ([ref]$selectedTarget) ([ref]$currentPosition) ([ref]$selectedTargetPiece) ([ref]$IsMoveQuery))
                 {
-                    Clear-Host
-                    Write-Host $(If($whitesTurn) {"Whites Turn"} Else {"Blacks Turn"});
-                    Write-Host " a b c d e f g h "
-                    For ($y = 0; $y -le 7;$y++)
+                    if ($IsMoveQuery -and $Grid[$currentPosition.X, $currentPosition.Y].OccupantAllegiance -eq $( If ($whitesTurn) {[Allegiance]::White } else {[Allegiance]::Black } ))
                     {
-                        Write-Host $([Math]::Abs($y-8)) -NoNewLine
-                        For ($x = 0; $x -le 7;$x++)
+                        Clear-Host
+                        Write-Host $( If ($whitesTurn)
                         {
-                            [System.ConsoleColor]$colour = $(If($moveCache.IsValidMove($currentPosition,[Position]::new($x,$y))) {
-                                [System.ConsoleColor]::Blue
-                            } else {
-                                If($Grid[$x,$y].IsWhiteTile){[System.ConsoleColor]::DarkYellow}else{[System.ConsoleColor]::DarkRed}
-                            })
-                            [System.ConsoleColor]$pieceColour = $(If($Grid[$x,$y].OccupantAllegiance -eq [Allegiance]::White){[System.ConsoleColor]::White}else{[System.ConsoleColor]::Black})
-                            $output = $Grid[$x,$y].GetIcon() + " "
-                            Write-Host $output -NoNewLine -BackgroundColor $colour -ForegroundColor $pieceColour
-                            
+                            "Whites Turn"
                         }
-                        Write-Host " "
+                        Else
+                        {
+                            "Blacks Turn"
+                        } );
+                        Write-Host " a b c d e f g h "
+                        For ($y = 0; $y -le 7; $y++)
+                        {
+                            Write-Host $([Math]::Abs($y - 8) ) -NoNewLine
+                            For ($x = 0; $x -le 7; $x++)
+                            {
+                                [System.ConsoleColor]$colour = $( If ( $moveCache.IsValidMove($currentPosition,[Position]::new($x, $y)))
+                                {
+                                    [System.ConsoleColor]::Blue
+                                }
+                                else
+                                {
+                                    If ($Grid[$x, $y].IsWhiteTile)
+                                    {
+                                        [System.ConsoleColor]::DarkYellow
+                                    }
+                                    else
+                                    {
+                                        [System.ConsoleColor]::DarkRed
+                                    }
+                                } )
+                                [System.ConsoleColor]$pieceColour = $( If ($Grid[$x, $y].OccupantAllegiance -eq [Allegiance]::White)
+                                {
+                                    [System.ConsoleColor]::White
+                                }
+                                else
+                                {
+                                    [System.ConsoleColor]::Black
+                                } )
+                                $output = $Grid[$x, $y].GetIcon() + " "
+                                Write-Host $output -NoNewLine -BackgroundColor $colour -ForegroundColor $pieceColour
 
+                            }
+                            Write-Host " "
+
+                        }
+                    }
+                    else
+                    {
+                        if ($Grid[$currentPosition.X, $currentPosition.Y].MovePiece($currentPosition, $selectedTarget, $Grid, $moveCache))
+                        {
+                            $whitesTurn = -not $whitesTurn;
+                            break;
+                        }
+                        else
+                        {
+                            echo "Invalid Move";
+                        }
                     }
                 }
                 else
                 {
-                    if ($Grid[$currentPosition.X, $currentPosition.Y].MovePiece($currentPosition, $selectedTarget, $Grid, $moveCache))
-                    {
-                        $whitesTurn = -not $whitesTurn;
-                        break;
-                    }
-                    else
-                    {
-                        echo "Invalid Move";
-                    }
+                    echo "Syntax Error. Use Format Ka1b2";
                 }
             }
-            else
-            {
-                echo "Syntax Error. Use Format Ka1b2";
-            }
         }
+    }
+    else #AI Turn
+    {
+        #selectedPosition
+        [Position]$AIselectedTarget = [Position]::new(0, 0)
+        #Current Position
+        [Position]$AIcurrentPosition = [Position]::new(0, 0)
+        $moveCache.GetAIMove([ref]$AIcurrentPosition,[ref]$AIselectedTarget)
+        Write-Host $AIselectedTarget.X
+        Write-Host $AIselectedTarget.Y
+        Write-Host $AIcurrentPosition.X
+        Write-Host $AIcurrentPosition.Y
+        $Grid[$AIcurrentPosition.X, $AIcurrentPosition.Y].MovePiece($AIcurrentPosition, $AIselectedTarget, $Grid, $moveCache)
+        $whitesTurn = -not $whitesTurn;
     }
 }
