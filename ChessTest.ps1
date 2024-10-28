@@ -107,7 +107,7 @@ class SpecialRule : IMoveRule
         $this.MoveGenerator = $newMoveGen;
     }
 
-    [System.Collections.Generic.List[MoveVsScore]] GetPossibleMoves([Position]$from, [string]$allegiance, $board) {
+    [System.Collections.Generic.List[MoveVsScore]] GetPossibleMoves([Position]$from, [Allegiance]$allegiance, $board) {
         if(& $this.Condition $from $allegiance $board) #& operator executes $this.Condition as a script using the parameters given
         {
             return & $this.MoveGenerator $from $allegiance $board
@@ -125,7 +125,7 @@ class CompositeRule : IMoveRule
         $this.Rules = $ComponentRules
     }
 
-    [System.Collections.Generic.List[MoveVsScore]] GetPossibleMoves([Position]$from, [string]$allegiance, $board) {
+    [System.Collections.Generic.List[MoveVsScore]] GetPossibleMoves([Position]$from, [Allegiance]$allegiance, $board) {
         $allMoves = [System.Collections.Generic.List[MoveVsScore]]::new()
         foreach($rule in $this.Rules)
         {
@@ -143,6 +143,7 @@ class MoveCache
 {
     [hashtable]$cachedMoves = @{}
     [string]$AIMove
+    [int]$SearchDepth
     
 
     hidden [string] GetMoveKey([Position]$from, [Position]$to) {
@@ -164,112 +165,79 @@ class MoveCache
     }
     
     #Return average non zero score. Do Checks 
-    [float] UpdateCache([Allegiance]$PlayerAllegiance,$Tiles,[int]$DoChecks,[bool]$UseWeightedAverage)
+    [float] UpdateCache([Allegiance]$PlayerAllegiance,$Tiles,[int]$DoChecks,[bool]$UseWeightedAverage,[ref]$MoveCounter)
     {
-        Write-Host "UpdateCache received depth value: $DoChecks of type $($DoChecks.GetType().Name)"
-
-        if ($null -eq $DoChecks) {
-            Write-Host "WARNING: Received null depth value!"
-            $DoChecks = 0
-        }
-
-        try {
-            [int]$LocalDepth = $DoChecks
-            Write-Host "Converted to local depth: $LocalDepth"
-        }
-        catch {
-            Write-Host "Error converting depth: $_"
-            $LocalDepth = 0
-        }
-        
-        [int]$LocalDepth = 0 + $DoChecks  # Force a new value
-        Write-Host "UpdateCache - Start with depth: $LocalDepth (Original: $DoChecks)"
+        $this.SearchDepth = $DoChecks
         
         [System.Collections.Generic.List[string]]$BestMoves = [System.Collections.Generic.List[string]]::new()
         [float]$BestMoveScore = [float]::MinValue
         [float]$CumulativeScore = 0
         [float]$TotalWeight = 0
-
+        
         $this.cachedMoves.Clear()
         $this.AIMove = ""
 
-        Write-Host "CHECKS: $LocalDepth UseWeighted: $UseWeightedAverage"
-
         For ($y = 0; $y -le 7; $y++) {
             For ($x = 0; $x -le 7; $x++) {
-                if ($PlayerAllegiance -ne $Tiles[$x,$y].OccupantAllegiance) { continue }
-                
-                $CurrentPosition = [Position]::new($x,$y)
-                [System.Collections.Generic.List[MoveVsScore]]$moves = $Tiles[$x,$y].GetMoves($CurrentPosition, $PlayerAllegiance, $Tiles)
-                
-                foreach ($moveTarget in $moves) {
-                    $moveScore = [float]($moveTarget.ScoreChange)
-                    $moveKey = $this.GetMoveKey($CurrentPosition, $moveTarget.Pos)
+                if ($PlayerAllegiance -eq $Tiles[$x, $y].OccupantAllegiance)
+                {
+                    $CurrentPosition = [Position]::new($x, $y)
+                    [System.Collections.Generic.List[MoveVsScore]]$moves = $Tiles[$x, $y].GetMoves($CurrentPosition, $PlayerAllegiance, $Tiles)
+                    $mL = $moves.Count
 
-                    #Only the AI will have greater than 0 depth ever
-                    
-                    Write-Host "ITER"
-                    Write-Host $LocalDepth
-                    if ($LocalDepth -gt 0) {
-                        Write-Host "DoChecks > 0, value: $LocalDepth"
-                        $lookAheadScore = $this.GetDepthScore($CurrentPosition, $moveTarget.Pos, $Tiles, $this, $PlayerAllegiance, [int]$LocalDepth,$UseWeightedAverage)
-                        
-                        $moveScore += $lookAheadScore
-                        Write-Host "Received lookAheadScore: $lookAheadScore"
-                        
-                        $NewTInstance = New-Object 'Tile[,]' 8,8
-
-                        for ($y = 0; $y -lt 8; $y++) {
-                            for ($x = 0; $x -lt 8; $x++) {
-                                $NewTInstance[$x,$y] = $Tiles[$x,$y].Clone()
-                            }
-                        }
-
-                        $NewTInstance[$CurrentPosition.X, $CurrentPosition.Y].MovePiece($CurrentPosition, $moveTarget.Pos, $NewTInstance, $this)
-                        if ($this.IsKingInDanger($PlayerAllegiance, $NewTInstance)) {
-                            $moveScore -= 10000
-                        }
-                    }
-                    else
+                    foreach ($moveTarget in $moves)
                     {
-                        Write-Host "DoChecks <= 0, value: $DoChecks"
-                    }
+                        $MoveCounter.Value = $MoveCounter.Value + 1
+                        $moveScore = [float]($moveTarget.ScoreChange)
+                        $moveKey = $this.GetMoveKey($CurrentPosition, $moveTarget.Pos)
+                        
+                        #Only the AI will have greater than 0 depth ever
+                        if ($this.SearchDepth -gt 0)
+                        {
+                            $lookAheadScore = $this.GetDepthScore($CurrentPosition, $moveTarget.Pos, $Tiles, $this, $PlayerAllegiance, $UseWeightedAverage, $MoveCounter)
 
-                    $this.cachedMoves[$moveKey] = $moveScore
+                            $moveScore += $lookAheadScore
+                        }
 
-                    [float]$weight = [Math]::Exp($moveScore / 100)  # Exponential weighting
-                    $CumulativeScore += $moveScore * $weight
-                    $TotalWeight += $weight
-                    
-                    if ($moveScore -gt $BestMoveScore) {
-                        $BestMoves.Clear()
-                        $BestMoves.Add($moveKey)
-                        $BestMoveScore = $moveScore
-                    }
-                    elseif ($moveScore -eq $BestMoveScore) {
-                        $BestMoves.Add($moveKey)
+                        $this.cachedMoves[$moveKey] = $moveScore
+
+                        [float]$weight = [Math]::Exp($moveScore / 100)  # Exponential weighting
+                        $CumulativeScore += $moveScore * $weight
+                        $TotalWeight += $weight
+
+                        if ($moveScore -gt $BestMoveScore)
+                        {
+                            $BestMoves.Clear()
+                            $BestMoves.Clear()
+                            $BestMoves.Add($moveKey)
+                            $BestMoveScore = $moveScore
+                        }
+                        elseif ($moveScore -eq $BestMoveScore)
+                        {
+                            $BestMoves.Add($moveKey)
+                        }
                     }
                 }
             }
         }
-        
+
+        if ($UseWeightedAverage -and $TotalWeight -gt 0) {
+            $weightScore = $CumulativeScore / $TotalWeight
+            $this.AIMove = $BestMoves[(Get-Random -Maximum $BestMoves.Count)]
+            return $weightScore
+        }
+
         if ($BestMoves.Count -gt 0) {
             $this.AIMove = $BestMoves[(Get-Random -Maximum $BestMoves.Count)]
             return $BestMoveScore
-        }
-
-        if ($UseWeightedAverage -and $TotalWeight -gt 0) {
-            return $CumulativeScore / $TotalWeight
         }
         
         return 0
     }
     
     #Add negative average of non 0
-    [float] GetDepthScore([Position]$FromPos,[Position]$ToPos,$Tiles,$MoveCache,[Allegiance]$PlayerAllegiance,[int]$IntDepth,[bool]$UseWeightedAverage)
+    [float] GetDepthScore([Position]$FromPos,[Position]$ToPos,$Tiles,$MoveCache,[Allegiance]$PlayerAllegiance,[bool]$UseWeightedAverage,[ref]$MoveCounter)
     {
-        Write-Host "===== GetDepthScore ====="
-        Write-Host "Initial IntDepth: $IntDepth"
 
         try {
         # Create deep copy of board
@@ -280,12 +248,8 @@ class MoveCache
                 $TilesInstance[$x,$y] = $Tiles[$x,$y].Clone()
             }
         }
-
-        Write-Host "Board copied successfully"
-
-        #TODO Error is occuring here because we haven't actually finished the move cache yet. We're checking if its possible to do a move which cannot exist yet.
-        $moveResult = $TilesInstance[$FromPos.X, $FromPos.Y].MovePiece($FromPos, $ToPos, $TilesInstance, $this)
-        Write-Host "Move result: $moveResult"
+        
+        $moveResult = $TilesInstance[$FromPos.X, $FromPos.Y].MovePiece($FromPos, $ToPos, $TilesInstance, $this,$true)
 
         if (-not $moveResult) {
             Write-Host "Invalid move, returning 0"
@@ -293,27 +257,20 @@ class MoveCache
         }
 
         $CacheInstance = [MoveCache]::new()
-        Write-Host "New cache instance created"
 
         $OpponentAllegiance = $(If($PlayerAllegiance -eq [Allegiance]::White) {[Allegiance]::Black} else {[Allegiance]::White})
-        Write-Host "Opponent allegiance calculated: $OpponentAllegiance"
 
-        [int]$NewDepth = $IntDepth - 1
-        Write-Host "New depth calculated: $NewDepth from $IntDepth"
-
-        Write-Host "===== ABOUT TO CALL UPDATE CACHE WITH DEPTH $NewDepth ====="
-        $depthScore = $null
+        [int]$NewDepth = $this.SearchDepth - 1
+        $depthScore = 0
         try {
-            $depthScore = $CacheInstance.UpdateCache($OpponentAllegiance, $TilesInstance, $NewDepth, $UseWeightedAverage)
-            Write-Host "Update cache returned: $depthScore"
+            $depthScore = $CacheInstance.UpdateCache($OpponentAllegiance, $TilesInstance, $NewDepth, $UseWeightedAverage,$MoveCounter)
         }
         catch {
             Write-Host "Error in UpdateCache call: $_"
             Write-Host $_.ScriptStackTrace
         }
 
-        $finalScore = $(If($IntDepth % 2 -eq 0) { $depthScore } else { -$depthScore })
-        Write-Host "Final score calculated: $finalScore"
+        $finalScore = $(If($this.SearchDepth % 2 -eq 0) { $depthScore } else { -$depthScore })
 
         return $finalScore
         }
@@ -356,8 +313,9 @@ class MoveCache
             [Allegiance]::White
         })
 
+        $TCounter = 0
         $tempCache = [MoveCache]::new()
-        $tempCache.UpdateCache($opponentAllegiance, $board, 0,$true)  # Just get immediate moves
+        $tempCache.UpdateCache($opponentAllegiance, $board, 0,$true,[ref]$TCounter)  # Just get immediate moves
 
         for ($y = 0; $y -lt 8; $y++) {
             for ($x = 0; $x -lt 8; $x++) {
@@ -538,7 +496,7 @@ class Tile
 
     [System.Collections.Generic.List[MoveVsScore]] GetMoves([Position]$from, [Allegiance]$allegiance, $board)
     {
-        return $this.OccupantPiece::PieceRules.GetPossibleMoves([Position]$from, [string]$allegiance, $board)
+        return $this.OccupantPiece::PieceRules.GetPossibleMoves($from, $allegiance, $board)
     }
     
     [int] GetTakingScore([Allegiance]$senderAllegiance)
@@ -565,9 +523,9 @@ class Tile
         }
     }
 
-    [bool] MovePiece([Position]$FromPos,[Position]$ToPos,$Tiles,$MoveCache)
+    [bool] MovePiece([Position]$FromPos,[Position]$ToPos,$Tiles,$MoveCache,$IgnoreCheck)
     {
-        if($this.CheckCanMoveTo($FromPos,$ToPos,$Tiles,$MoveCache))
+        if($IgnoreCheck -or $this.CheckCanMoveTo($FromPos,$ToPos,$Tiles,$MoveCache))
         {
             $Tiles[$ToPos.X,$ToPos.Y].OccupantPiece = $this.OccupantPiece;
             $this.OccupantPiece = $null;
@@ -657,15 +615,17 @@ $moveCache = [MoveCache]::new()
 
 $continue = $true
 $whitesTurn = $true
-
 while($continue)
 {
-    #Clear-Host
-    $AIDepth = $(If($whitesTurn){0}else{4})
-    Write-Host $(-not $whitesTurn)
-    $moveCache.UpdateCache($(If($whitesTurn){[Allegiance]::White}else{[Allegiance]::Black}),$Grid,$AIDepth,-not $whitesTurn)
+    Clear-Host
+    $AIDepth = $(If($whitesTurn){0}else{2})
+
+    Write-Host $(If($whitesTurn) {"Your Turn"} Else {"Enemy Thinking..."});
     
-    Write-Host $(If($whitesTurn) {"Your Turn"} Else {"Enemy Turn"});
+    $totalMoves = 0
+    $moveCache.UpdateCache($(If($whitesTurn){[Allegiance]::White}else{[Allegiance]::Black}),$Grid,$AIDepth,-not $whitesTurn,[ref]$totalMoves)
+    Write-Host "Examined $totalMoves"
+    
     Write-Host " a b c d e f g h ";
 
     For ($y = 0; $y -le 7;$y++)
@@ -702,7 +662,7 @@ while($continue)
                 #Expected Piece
                 $selectedTargetPiece = $null
                 #If Move Query
-                [bool]$IsMoveQuery = $null
+                [bool]$IsMoveQuery = $true
                 if (ParseNotation $Move ([ref]$selectedTarget) ([ref]$currentPosition) ([ref]$selectedTargetPiece) ([ref]$IsMoveQuery))
                 {
                     if ($IsMoveQuery -and $Grid[$currentPosition.X, $currentPosition.Y].OccupantAllegiance -eq $( If ($whitesTurn) {[Allegiance]::White } else {[Allegiance]::Black } ))
@@ -755,7 +715,7 @@ while($continue)
                     }
                     else
                     {
-                        if ($Grid[$currentPosition.X, $currentPosition.Y].MovePiece($currentPosition, $selectedTarget, $Grid, $moveCache))
+                        if ($Grid[$currentPosition.X, $currentPosition.Y].MovePiece($currentPosition, $selectedTarget, $Grid, $moveCache,$false))
                         {
                             $whitesTurn = -not $whitesTurn;
                             break;
@@ -780,7 +740,8 @@ while($continue)
         #Current Position
         [Position]$AIcurrentPosition = [Position]::new(0, 0)
         $moveCache.GetAIMove([ref]$AIcurrentPosition,[ref]$AIselectedTarget)
-        $Grid[$AIcurrentPosition.X, $AIcurrentPosition.Y].MovePiece($AIcurrentPosition, $AIselectedTarget, $Grid, $moveCache)
+        Write-Host "AI MOVE FROM $($AIcurrentPosition.X),$($AIcurrentPosition.Y) to $($AIselectedTarget.X),$($AIselectedTarget.Y)"
+        $Grid[$AIcurrentPosition.X, $AIcurrentPosition.Y].MovePiece($AIcurrentPosition, $AIselectedTarget, $Grid, $moveCache,$false)
         $whitesTurn = -not $whitesTurn;
     }
 }
