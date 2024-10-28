@@ -139,6 +139,45 @@ class CompositeRule : IMoveRule
     }
 }
 
+class PostMoveEffect
+{
+    [scriptBlock]$Condition
+    [scriptBlock]$Effect
+    [int]$ScoreChangeIfApplied
+
+    PostMoveEffect()
+    {
+
+    }
+
+    PostMoveEffect([scriptBlock]$nCondition,[scriptBlock]$nEffect,[int]$nScoreChange)
+    {
+        $this.Condition = $nCondition
+        $this.Effect = $nEffect
+        $this.ScoreChangeIfApplied = $nScoreChange
+    }
+    
+    #Used when we are evaluating the score change based on moves to 
+    [float] AddScoreToMove($newPosition, $allegiance, $board)
+    {
+        if(& $this.Condition $newPosition $allegiance $board) {return $this.ScoreChangeIfApplied}
+        return 0
+    }
+    
+    #Actually Computes the result of the action
+    [bool] DoEffect($newPosition, $allegiance, $board)
+    {
+        if(& $this.Condition $newPosition $allegiance $board)
+        {
+            Write-Host "DOING EFFECT"
+            & $this.Effect $newPosition $allegiance $board
+            
+            return $true
+        }
+        return $false
+    }
+}
+
 class MoveCache
 {
     [hashtable]$cachedMoves = @{}
@@ -172,7 +211,6 @@ class MoveCache
         [System.Collections.Generic.List[string]]$BestMoves = [System.Collections.Generic.List[string]]::new()
         [float]$BestMoveScore = [float]::MinValue
         [float]$CumulativeScore = 0
-        #[float]$TotalWeight = 0
         
         $this.cachedMoves.Clear()
         $this.AIMove = ""
@@ -189,6 +227,7 @@ class MoveCache
                     {
                         $MoveCounter.Value = $MoveCounter.Value + 1
                         $moveScore = [float]($moveTarget.ScoreChange)
+                        $moveScore += $($Tiles[$x,$y].OccupantPiece::PostMove.AddScoreToMove($moveTarget.Pos,$PlayerAllegiance,$Tiles))
                         $moveKey = $this.GetMoveKey($CurrentPosition, $moveTarget.Pos)
                         
                         #Only the AI will have greater than 0 depth ever
@@ -275,6 +314,7 @@ class PieceTypeBase
     static [char]$pieceIcon = 'N';
     static [int]$pieceValue = 0;
     static [CompositeRule]$PieceRules = @{}
+    static [PostMoveEffect]$PostMove = @{}
 }
 
 class Pawn : PieceTypeBase
@@ -344,6 +384,16 @@ class Pawn : PieceTypeBase
             return $moves
         })
     ))
+    static [PostMoveEffect]$PostMove = [PostMoveEffect]::new(
+    {
+        param($newPosition, $allegiance, $board)
+        return (($allegiance -eq [Allegiance]::White -and $newPosition.Y -eq 0) -or ($allegiance -eq [Allegiance]::Black -and $newPosition.Y -eq 7))
+    },
+    {
+        param($newPosition, $allegiance, $board)
+        $board[$newPosition.X,$newPosition.Y].OccupantPiece = [Queen]
+    }, 8)
+    
     
     #TODO ADD EN PASSANT
 }
@@ -354,6 +404,7 @@ class Rook : PieceTypeBase
     static [int]$pieceValue = 5;
     static [CompositeRule]$PieceRules = [CompositeRule]::new(@([DirectionalRule]::new(1,0,$true),[DirectionalRule]::new(-1,0,$true),
     [DirectionalRule]::new(0,1,$true),[DirectionalRule]::new(0,-1,$true)));
+    static [PostMoveEffect]$PostMove = [PostMoveEffect]::new({param($newPosition, $allegiance, $board)return $false},{param($newPosition, $allegiance, $board)},0)
     
     #TODO ADD CASTLING
 }
@@ -366,6 +417,7 @@ class Knight : PieceTypeBase
     [DirectionalRule]::new(-2,1,$false),[DirectionalRule]::new(-2,-1,$false),
             [DirectionalRule]::new(1,2,$false),[DirectionalRule]::new(1,-2,$false),
             [DirectionalRule]::new(-1,2,$false),[DirectionalRule]::new(-1,-2,$false)));
+    static [PostMoveEffect]$PostMove = [PostMoveEffect]::new({param($newPosition, $allegiance, $board)return $false},{param($newPosition, $allegiance, $board)},0)
 }
 
 class Bishop : PieceTypeBase
@@ -374,6 +426,7 @@ class Bishop : PieceTypeBase
     static [int]$pieceValue = 3;
     static [CompositeRule]$PieceRules = [CompositeRule]::new(@([DirectionalRule]::new(1,1,$true),[DirectionalRule]::new(1,-1,$true),
     [DirectionalRule]::new(-1,1,$true),[DirectionalRule]::new(-1,-1,$true)));
+    static [PostMoveEffect]$PostMove = [PostMoveEffect]::new({param($newPosition, $allegiance, $board)return $false},{param($newPosition, $allegiance, $board)},0)
 }
 
 class King : PieceTypeBase
@@ -390,6 +443,7 @@ class King : PieceTypeBase
         [DirectionalRule]::new(-1, 1, $false),
         [DirectionalRule]::new(-1, -1, $false)
     ))
+    static [PostMoveEffect]$PostMove = [PostMoveEffect]::new({param($newPosition, $allegiance, $board)return $false},{param($newPosition, $allegiance, $board)},0)
 
     #TODO ADD RULE PREVENTING PUTTING SELF IN CHECK
     #TODO ADD CASTLING?
@@ -409,6 +463,7 @@ class Queen : PieceTypeBase
         [DirectionalRule]::new(-1, 1, $true),
         [DirectionalRule]::new(-1, -1, $true)
     ))
+    static [PostMoveEffect]$PostMove = [PostMoveEffect]::new({param($newPosition, $allegiance, $board)return $false},{param($newPosition, $allegiance, $board)},0)
 }
 
 class Tile
@@ -462,10 +517,16 @@ class Tile
     {
         if($IgnoreCheck -or $this.CheckCanMoveTo($FromPos,$ToPos,$Tiles,$MoveCache))
         {
+            #Swap Pieces
             $Tiles[$ToPos.X,$ToPos.Y].OccupantPiece = $this.OccupantPiece;
             $this.OccupantPiece = $null;
-            $Tiles[$ToPos.X,$ToPos.Y].OccupantAllegiance = $this.OccupantAllegiance;
+            $newAllegiance = $this.OccupantAllegiance
+            $Tiles[$ToPos.X,$ToPos.Y].OccupantAllegiance = $newAllegiance;
             $this.OccupantAllegiance = [Allegiance]::None;
+            
+            #Do post move effect e.g become queen if pawn 
+            $Tiles[$ToPos.X,$ToPos.Y].OccupantPiece::PostMove.DoEffect($ToPos,$newAllegiance,$Tiles)
+            
             return $true;
         }
         else
@@ -553,13 +614,13 @@ $whitesTurn = $true
 while($continue)
 {
     #Clear-Host
-    $AIDepth = $(If($whitesTurn){0}else{1})
+    $AIDepth = $(If($whitesTurn){0}else{0}) #Else as 1 for AI 
 
     Write-Host $(If($whitesTurn) {"Your Turn"} Else {"Enemy Thinking..."});
     
     $totalMoves = 0
-    $moveCache.UpdateCache($(If($whitesTurn){[Allegiance]::White}else{[Allegiance]::Black}),$Grid,$AIDepth,[ref]$totalMoves)
-    Write-Host "Examined $totalMoves"
+    $maxScore = $moveCache.UpdateCache($(If($whitesTurn){[Allegiance]::White}else{[Allegiance]::Black}),$Grid,$AIDepth,[ref]$totalMoves)
+    Write-Host "Possible Moves $totalMoves maxScore $maxScore"
     
     Write-Host " a b c d e f g h ";
 
