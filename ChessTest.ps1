@@ -230,25 +230,29 @@ class MoveCache
                         $moveScore += $($Tiles[$x,$y].OccupantPiece::PostMove.AddScoreToMove($moveTarget.Pos,$PlayerAllegiance,$Tiles))
                         $moveKey = $this.GetMoveKey($CurrentPosition, $moveTarget.Pos)
                         
-                        #Only the AI will have greater than 0 depth ever
                         if ($this.SearchDepth -gt 0)
                         {
                             $lookAheadScore = $this.GetDepthScore($CurrentPosition, $moveTarget.Pos, $Tiles, $this, $PlayerAllegiance, $MoveCounter)
 
                             $moveScore += $lookAheadScore
+                            
                         }
 
-                        $this.cachedMoves[$moveKey] = $moveScore
-                        
-                        if ($moveScore -gt $BestMoveScore)
+                        #If this move is one turn ahead and would cause us to lose our king, we cannot make it
+                        if(-not ($this.SearchDepth -eq 1 -and $moveScore -lt -900))
                         {
-                            $BestMoves.Clear()
-                            $BestMoves.Add($moveKey)
-                            $BestMoveScore = $moveScore
-                        }
-                        elseif ($moveScore -eq $BestMoveScore)
-                        {
-                            $BestMoves.Add($moveKey)
+                            $this.cachedMoves[$moveKey] = $moveScore
+
+                            if ($moveScore -gt $BestMoveScore)
+                            {
+                                $BestMoves.Clear()
+                                $BestMoves.Add($moveKey)
+                                $BestMoveScore = $moveScore
+                            }
+                            elseif ($moveScore -eq $BestMoveScore)
+                            {
+                                $BestMoves.Add($moveKey)
+                            }
                         }
                     }
                 }
@@ -260,7 +264,7 @@ class MoveCache
             return $BestMoveScore
         }
         
-        return 0
+        return [float]::MinValue
     }
     
     #Add negative average of non 0
@@ -614,13 +618,20 @@ $whitesTurn = $true
 while($continue)
 {
     #Clear-Host
-    $AIDepth = $(If($whitesTurn){0}else{0}) #Else as 1 for AI 
+    $AIDepth = 1
 
     Write-Host $(If($whitesTurn) {"Your Turn"} Else {"Enemy Thinking..."});
     
     $totalMoves = 0
     $maxScore = $moveCache.UpdateCache($(If($whitesTurn){[Allegiance]::White}else{[Allegiance]::Black}),$Grid,$AIDepth,[ref]$totalMoves)
-    Write-Host "Possible Moves $totalMoves maxScore $maxScore"
+    Write-Host "Analysed $totalMoves Moves maxScore $maxScore"
+    
+    if($maxScore -eq [float]::MinValue) #If there is no moves left
+    {
+        $winner = $(If($whitesTurn){"Black"}else{"White"})
+        Write-Host "Checkmate. $winner Wins!"
+        break;
+    }
     
     Write-Host " a b c d e f g h ";
 
