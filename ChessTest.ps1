@@ -169,7 +169,6 @@ class PostMoveEffect
     {
         if(& $this.Condition $newPosition $allegiance $board)
         {
-            Write-Host "DOING EFFECT"
             & $this.Effect $newPosition $allegiance $board
             
             return $true
@@ -447,9 +446,8 @@ class King : PieceTypeBase
         [DirectionalRule]::new(-1, 1, $false),
         [DirectionalRule]::new(-1, -1, $false)
     ))
-    static [PostMoveEffect]$PostMove = [PostMoveEffect]::new({param($newPosition, $allegiance, $board)return $false},{param($newPosition, $allegiance, $board)},0)
-
-    #TODO ADD RULE PREVENTING PUTTING SELF IN CHECK
+    static [PostMoveEffect]$PostMove = [PostMoveEffect]::new({param($newPosition, $allegiance, $board)return $false},{param($newPosition, $allegiance, $board)},-100)
+    
     #TODO ADD CASTLING?
 }
 
@@ -615,10 +613,11 @@ $moveCache = [MoveCache]::new()
 
 $continue = $true
 $whitesTurn = $true
+$AiEnabled = $true
 while($continue)
 {
     #Clear-Host
-    $AIDepth = 1
+    $AIDepth = $(If($whitesTurn -or (-not $AiEnabled)) {1} Else {1}); #set to 2 later?
 
     Write-Host $(If($whitesTurn) {"Your Turn"} Else {"Enemy Thinking..."});
     
@@ -648,12 +647,18 @@ while($continue)
         Write-Host " "
     }
     
-    if($whitesTurn)
+    if($whitesTurn -or (-not $AiEnabled))
     {
         while ($true)
         {
             Write-Host " "
             $Move = Read-Host "Enter Move";
+
+            if ($Move -eq "AI")
+            {
+                Write-Host "AI TOGGLED"
+                $AiEnabled = -not $AiEnabled
+            }
 
             if ($Move -eq "exit")
             {
