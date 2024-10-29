@@ -871,6 +871,7 @@ while($continue)
     }
     else #AI Turn
     {
+        #TODO rarely the AI will not move
         #selectedPosition
         [Position]$AIselectedTarget = [Position]::new(0, 0)
         #Current Position
