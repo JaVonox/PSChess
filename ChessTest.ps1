@@ -1,4 +1,6 @@
-﻿#Game constructs
+﻿param($boardType)
+
+#Game constructs
 enum Allegiance
 {
     None
@@ -210,9 +212,20 @@ class MoveCache
         [System.Collections.Generic.List[string]]$BestMoves = [System.Collections.Generic.List[string]]::new()
         [float]$BestMoveScore = [float]::MinValue
         [float]$CumulativeScore = 0
+        [Position] $KingPosition = $null
         
         $this.cachedMoves.Clear()
         $this.AIMove = ""
+
+        For ($y = 0; $y -le 7 -and $KingPosition -eq $null; $y++) {
+            For ($x = 0; $x -le 7; $x++) {
+                if ($PlayerAllegiance -eq $Tiles[$x, $y].OccupantAllegiance -and $Tiles[$x,$y].OccupantPiece -eq [King])
+                {
+                    $KingPosition = [Position]::new($x,$y)
+                    break;
+                }
+            }
+        }
 
         For ($y = 0; $y -le 7; $y++) {
             For ($x = 0; $x -le 7; $x++) {
@@ -220,7 +233,6 @@ class MoveCache
                 {
                     $CurrentPosition = [Position]::new($x, $y)
                     [System.Collections.Generic.List[MoveVsScore]]$moves = $Tiles[$x, $y].GetMoves($CurrentPosition, $PlayerAllegiance, $Tiles)
-                    $mL = $moves.Count
 
                     foreach ($moveTarget in $moves)
                     {
@@ -229,29 +241,31 @@ class MoveCache
                         $moveScore += $($Tiles[$x,$y].OccupantPiece::PostMove.AddScoreToMove($moveTarget.Pos,$PlayerAllegiance,$Tiles))
                         $moveKey = $this.GetMoveKey($CurrentPosition, $moveTarget.Pos)
                         
+                        #TODO is it possible to break this by having a king move cause a possible >-900 lookahead score if it would sacrifice the king?
+                        #If we have another search depth to go, append a depth score
                         if ($this.SearchDepth -gt 0)
                         {
-                            $lookAheadScore = $this.GetDepthScore($CurrentPosition, $moveTarget.Pos, $Tiles, $this, $PlayerAllegiance, $MoveCounter)
-
+                            $lookAheadScore = $this.GetDepthScore($CurrentPosition, $moveTarget.Pos, $Tiles, $this, $PlayerAllegiance,$KingPosition, $MoveCounter)
                             $moveScore += $lookAheadScore
-                            
                         }
 
-                        #If this move is one turn ahead and would cause us to lose our king, we cannot make it
-                        if(-not ($this.SearchDepth -eq 1 -and $moveScore -lt -900))
+                        # Now check if this move would lose our king AFTER all scoring is done
+                        if($moveScore -lt -600)  # Remove depth check, just look at final score
                         {
-                            $this.cachedMoves[$moveKey] = $moveScore
+                            continue  # Skip this move as it loses our king
+                        }
 
-                            if ($moveScore -gt $BestMoveScore)
-                            {
-                                $BestMoves.Clear()
-                                $BestMoves.Add($moveKey)
-                                $BestMoveScore = $moveScore
-                            }
-                            elseif ($moveScore -eq $BestMoveScore)
-                            {
-                                $BestMoves.Add($moveKey)
-                            }
+                        $this.cachedMoves[$moveKey] = $moveScore
+
+                        if ($moveScore -gt $BestMoveScore)
+                        {
+                            $BestMoves.Clear()
+                            $BestMoves.Add($moveKey)
+                            $BestMoveScore = $moveScore
+                        }
+                        elseif ($moveScore -eq $BestMoveScore)
+                        {
+                            $BestMoves.Add($moveKey)
                         }
                     }
                 }
@@ -265,19 +279,17 @@ class MoveCache
         
         return [float]::MinValue
     }
-    
-    #Add negative average of non 0
-    [float] GetDepthScore([Position]$FromPos,[Position]$ToPos,$Tiles,$MoveCache,[Allegiance]$PlayerAllegiance,[ref]$MoveCounter)
+
+    [float] GetDepthScore([Position]$FromPos,[Position]$ToPos,$Tiles,$MoveCache,[Allegiance]$PlayerAllegiance,[Position]$MyKingPos,[ref]$MoveCounter)
     {
         # Create deep copy of board
         $TilesInstance = New-Object 'Tile[,]' 8,8
-
         for ($y = 0; $y -lt 8; $y++) {
             for ($x = 0; $x -lt 8; $x++) {
                 $TilesInstance[$x,$y] = $Tiles[$x,$y].Clone()
             }
         }
-        
+
         $moveResult = $TilesInstance[$FromPos.X, $FromPos.Y].MovePiece($FromPos, $ToPos, $TilesInstance, $this,$true)
 
         if (-not $moveResult) {
@@ -286,16 +298,118 @@ class MoveCache
         }
 
         $CacheInstance = [MoveCache]::new()
-
         $OpponentAllegiance = $(If($PlayerAllegiance -eq [Allegiance]::White) {[Allegiance]::Black} else {[Allegiance]::White})
-
         [int]$NewDepth = $this.SearchDepth - 1
-        
+
+        # Get the base score from deeper analysis
         $depthScore = $CacheInstance.UpdateCache($OpponentAllegiance, $TilesInstance, $NewDepth,$MoveCounter)
+        
+        if($this.IsKingInCheck($PlayerAllegiance, $MyKingPos, $TilesInstance))
+        {
+            $depthScore += 200
+        }
 
-        $finalScore = $(If($this.SearchDepth % 2 -eq 0) { $depthScore } else { -$depthScore })
+        #Write-Host "Depth $($this.SearchDepth) Score: $depthScore "
+        return -$depthScore
+    }
 
-        return $finalScore
+    hidden [bool] IsKingInCheck([Allegiance]$kingAllegiance, [Position]$kingPos, [Tile[,]]$board) {
+        $opponentAllegiance = $(If($kingAllegiance -eq [Allegiance]::White) {[Allegiance]::Black} else {[Allegiance]::White})
+
+        # Check diagonal rays (Bishop/Queen)
+        $diagonalRays = @(
+            @(1,1), @(1,-1), @(-1,1), @(-1,-1)
+        )
+        foreach ($ray in $diagonalRays) {
+            $x = $kingPos.X
+            $y = $kingPos.Y
+
+            while ($true) {
+                $x += $ray[0]
+                $y += $ray[1]
+
+                if ($x -lt 0 -or $x -gt 7 -or $y -lt 0 -or $y -gt 7) { break }
+
+                $piece = $board[$x,$y].OccupantPiece
+                $allegiance = $board[$x,$y].OccupantAllegiance
+
+                if ($allegiance -ne [Allegiance]::None) {
+                    if ($allegiance -eq $opponentAllegiance -and
+                            ($piece -eq [Queen] -or $piece -eq [Bishop])) {
+                        return $true
+                    }
+                    break  # Ray is blocked
+                }
+            }
+        }
+
+        # Check straight rays (Rook/Queen)
+        $straightRays = @(
+            @(0,1), @(0,-1), @(1,0), @(-1,0)
+        )
+        foreach ($ray in $straightRays) {
+            $x = $kingPos.X
+            $y = $kingPos.Y
+
+            while ($true) {
+                $x += $ray[0]
+                $y += $ray[1]
+
+                if ($x -lt 0 -or $x -gt 7 -or $y -lt 0 -or $y -gt 7) { break }
+
+                $piece = $board[$x,$y].OccupantPiece
+                $allegiance = $board[$x,$y].OccupantAllegiance
+
+                if ($allegiance -ne [Allegiance]::None) {
+                    if ($allegiance -eq $opponentAllegiance -and
+                            ($piece -eq [Queen] -or $piece -eq [Rook])) {
+                        return $true
+                    }
+                    break  # Ray is blocked
+                }
+            }
+        }
+
+        # Check knight positions
+        $knightMoves = @(
+            @(-2,-1), @(-2,1), @(-1,-2), @(-1,2),
+            @(1,-2), @(1,2), @(2,-1), @(2,1)
+        )
+        foreach ($move in $knightMoves) {
+            $x = $kingPos.X + $move[0]
+            $y = $kingPos.Y + $move[1]
+
+            if ($x -ge 0 -and $x -le 7 -and $y -ge 0 -and $y -le 7) {
+                $piece = $board[$x,$y].OccupantPiece
+                $allegiance = $board[$x,$y].OccupantAllegiance
+
+                if ($allegiance -eq $opponentAllegiance -and $piece -eq [Knight]) {
+                    return $true
+                }
+            }
+        }
+
+        # Check pawn attacks
+        $pawnDirection = $(If($kingAllegiance -eq [Allegiance]::White) {1} else {-1})
+        $pawnAttacks = @(
+            @(-1, -$pawnDirection),
+            @(1, -$pawnDirection)
+        )
+        foreach ($attack in $pawnAttacks) {
+            $x = $kingPos.X + $attack[0]
+            $y = $kingPos.Y + $attack[1]
+
+            if ($x -ge 0 -and $x -le 7 -and $y -ge 0 -and $y -le 7) {
+                $piece = $board[$x,$y].OccupantPiece
+                $allegiance = $board[$x,$y].OccupantAllegiance
+
+                if ($allegiance -eq $opponentAllegiance -and $piece -eq [Pawn]) {
+                    return $true
+                }
+            }
+        }
+
+        return $false
     }
     
     [bool] IsValidMove([Position]$FromPosition,[Position]$TargetPosition)
@@ -308,6 +422,7 @@ class MoveCache
     {
         return $this.ParseMoveKey($this.AIMove,$FromPosition,$TargetPosition)
     }
+    
     
 }
 #Pieces
@@ -446,7 +561,7 @@ class King : PieceTypeBase
         [DirectionalRule]::new(-1, 1, $false),
         [DirectionalRule]::new(-1, -1, $false)
     ))
-    static [PostMoveEffect]$PostMove = [PostMoveEffect]::new({param($newPosition, $allegiance, $board)return $false},{param($newPosition, $allegiance, $board)},-100)
+    static [PostMoveEffect]$PostMove = [PostMoveEffect]::new({param($newPosition, $allegiance, $board)return $false},{param($newPosition, $allegiance, $board)},0)
     
     #TODO ADD CASTLING?
 }
@@ -546,13 +661,13 @@ class Tile
     }
 }
 
-function GenerateBaseGrid($Tiles)
+function GenerateBaseGrid($Tiles,[scriptBlock]$Pattern)
 {
     $IndexTyping = @([Rook],[Knight],[Bishop],[Queen],[King],[Pawn]);
     for ($y = 1; $y -le 8; $y++) {
         $IsWhiteBarracks = ($y -ge 7);
         for ($x = 1; $x -le 8; $x++) {
-            $TileOccupantIndex = [int]($y -eq 1 -or $y -eq 8) * $(If($x -le 5) {$x} Else {8-$x+1}) + ([int]($y -eq 2 -or $y -eq 7) * 6) - 1;
+            $TileOccupantIndex = & $Pattern $x $y
 
             $NewOccupantType = $null
             $Allegiance = [Allegiance]::None;
@@ -608,7 +723,16 @@ function ParseNotation([string]$notation,[ref]$ToPos,[ref]$FromPos,[ref]$TargetP
 
 [Tile[,]]$Grid = New-Object 'Tile[,]' 8,8
 
-GenerateBaseGrid $Grid
+[scriptBlock]$NewPattern
+
+switch($boardType)
+{
+    {$null -eq $_ -or $_ -eq ''} { $NewPattern = {param($x,$y) return [int]($y -eq 1 -or $y -eq 8) * $(If($x -le 5) {$x} Else {8-$x+1}) + ([int]($y -eq 2 -or $y -eq 7) * 6) - 1};break; }
+    "C1" {$NewPattern = {param($x,$y) return ([int]($y -eq 1 -and $x -eq 8) * 5 + [int]($y -eq 7 -and $x -eq 2) * 5 + [int]($y -eq 1 -and $x -eq 1) * 1 + [int]($y -eq 1 -and $x -eq 3) * 1 + [int]($y -eq 2 -and $x -eq 7) * 4) - 1}; break; }
+    "C2" { $NewPattern = {param($x,$y) return ([int]($y -eq 1 -and $x -eq 5) * 5 + [int]($y -eq 7 -and $x -eq 8) * 5 + [int]($y -eq 2 -and $x -eq 6) * 2 + [int]($y -eq 2 -and $x -eq 8) * 4 + [int]($y -eq 7 -and ($x -eq 6 -or $x -eq 7)) * 6) - 1}; break; }
+}
+
+GenerateBaseGrid $Grid $NewPattern
 $moveCache = [MoveCache]::new()
 
 $continue = $true
@@ -616,21 +740,14 @@ $whitesTurn = $true
 $AiEnabled = $true
 while($continue)
 {
-    #Clear-Host
-    $AIDepth = $(If($whitesTurn -or (-not $AiEnabled)) {1} Else {1}); #set to 2 later?
+    Clear-Host
+    $AIDepth = $(If($whitesTurn -or (-not $AiEnabled)) {1} Else {2});
 
     Write-Host $(If($whitesTurn) {"Your Turn"} Else {"Enemy Thinking..."});
     
     $totalMoves = 0
     $maxScore = $moveCache.UpdateCache($(If($whitesTurn){[Allegiance]::White}else{[Allegiance]::Black}),$Grid,$AIDepth,[ref]$totalMoves)
     Write-Host "Analysed $totalMoves Moves maxScore $maxScore"
-    
-    if($maxScore -eq [float]::MinValue) #If there is no moves left
-    {
-        $winner = $(If($whitesTurn){"Black"}else{"White"})
-        Write-Host "Checkmate. $winner Wins!"
-        break;
-    }
     
     Write-Host " a b c d e f g h ";
 
@@ -645,6 +762,13 @@ while($continue)
             Write-Host $output -NoNewLine -BackgroundColor $colour -ForegroundColor $pieceColour
         }
         Write-Host " "
+    }
+
+    if($maxScore -eq [float]::MinValue) #If there is no moves left
+    {
+        $winner = $(If($whitesTurn){"Black"}else{"White"})
+        Write-Host "Checkmate. $winner Wins!"
+        break;
     }
     
     if($whitesTurn -or (-not $AiEnabled))
