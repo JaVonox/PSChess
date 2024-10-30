@@ -29,19 +29,23 @@ class Position {
 }
 
 class MoveVsScore{
-    [Position]$Pos
+    [Position]$MoveTo
     [int]$ScoreChange
+    [Position]$EnemyRemovePosition
 
     MoveVsScore()
     {
         
     }
 
-    MoveVsScore([Position]$nPos,[int]$nScoreChange)
+    MoveVsScore([Position]$nPos,[int]$nScoreChange,[Position]$nEnemyRemovePos)
     {
-        $this.Pos = $nPos
+        #Write-Host "Target $($nPos.X) $($nPos.Y) scorechange ($nScoreChange) removepos $($nEnemyRemovePos.X) $($nEnemyRemovePos.Y)"
+        $this.MoveTo = $nPos
         $this.ScoreChange = $nScoreChange
+        $this.EnemyRemovePosition = $nEnemyRemovePos
     }
+
 }
 
 class IMoveRule {
@@ -78,12 +82,12 @@ class DirectionalRule : IMoveRule
             {
                 if($board[$x,$y].OccupantAllegiance -ne $myAllegiance)
                 {
-                    $moves.Add([MoveVsScore]::new($pos,$($board[$x,$y].GetTakingScore($myAllegiance))))
+                    $moves.Add([MoveVsScore]::new($pos,$($board[$x,$y].GetTakingScore($myAllegiance)),$pos))
                 }
                 break;
             }
             
-            $moves.Add([MoveVsScore]::new($pos,0))
+            $moves.Add([MoveVsScore]::new($pos,0,$pos))
             
             if(-not $this.Repeating)
             {
@@ -185,7 +189,6 @@ class MoveCache
     [string]$AIMove
     [int]$SearchDepth
     
-
     hidden [string] GetMoveKey([Position]$from, [Position]$to) {
         return ($from.X) -bor ($from.Y -shl 3) -bor ($to.X -shl 6) -bor ($to.Y -shl 9)
     }
@@ -236,16 +239,17 @@ class MoveCache
 
                     foreach ($moveTarget in $moves)
                     {
+                        
                         $MoveCounter.Value = $MoveCounter.Value + 1
                         $moveScore = [float]($moveTarget.ScoreChange)
-                        $moveScore += $($Tiles[$x,$y].OccupantPiece::PostMove.AddScoreToMove($moveTarget.Pos,$PlayerAllegiance,$Tiles))
-                        $moveKey = $this.GetMoveKey($CurrentPosition, $moveTarget.Pos)
+                        $moveScore += $($Tiles[$x,$y].OccupantPiece::PostMove.AddScoreToMove($moveTarget.MoveTo,$PlayerAllegiance,$Tiles))
+                        $moveKey = $this.GetMoveKey($CurrentPosition, $moveTarget.MoveTo)
                         
                         #TODO is it possible to break this by having a king move cause a possible >-900 lookahead score if it would sacrifice the king?
                         #If we have another search depth to go, append a depth score
                         if ($this.SearchDepth -gt 0)
                         {
-                            $lookAheadScore = $this.GetDepthScore($CurrentPosition, $moveTarget.Pos, $Tiles, $this, $PlayerAllegiance,$KingPosition, $MoveCounter)
+                            $lookAheadScore = $this.GetDepthScore($CurrentPosition, $moveTarget.MoveTo, $Tiles, $this, $PlayerAllegiance,$KingPosition, $MoveCounter)
                             $moveScore += $lookAheadScore
                         }
 
@@ -255,8 +259,9 @@ class MoveCache
                             continue  # Skip this move as it loses our king
                         }
 
-                        $this.cachedMoves[$moveKey] = $moveScore
-
+                        $moveTarget.ScoreChange = $moveScore
+                        $this.cachedMoves[$moveKey] = $moveTarget
+                        
                         if ($moveScore -gt $BestMoveScore)
                         {
                             $BestMoves.Clear()
@@ -309,6 +314,16 @@ class MoveCache
         }
         
         return -$depthScore
+    }
+
+    [Position] GetKillPosition([Position]$FromPos,[Position]$ToPos)
+    {
+        $moveKey = $this.GetMoveKey($FromPos, $ToPos)
+        if ($this.cachedMoves.ContainsKey($moveKey))
+        {
+            return $this.cachedMoves[$moveKey].EnemyRemovePosition
+        }
+        return $null
     }
 
     hidden [bool] IsKingInCheck([Allegiance]$kingAllegiance, [Position]$kingPos, [Tile[,]]$board) {
@@ -409,7 +424,7 @@ class MoveCache
 
         return $false
     }
-    
+
     [bool] IsValidMove([Position]$FromPosition,[Position]$TargetPosition)
     {
         $moveKey = $this.GetMoveKey($FromPosition, $TargetPosition)
@@ -450,14 +465,14 @@ class Pawn : PieceTypeBase
             $moves = [System.Collections.Generic.List[MoveVsScore]]::new()
             
             $firstMove = [Position]::new($from.X, $($from.Y + $MovementDirection))
-            $moves.Add([MoveVsScore]::new($firstMove,$($Tiles[$from.X,$($from.Y + $MovementDirection)].GetTakingScore($allegiance))))
+            $moves.Add([MoveVsScore]::new($firstMove,$($Tiles[$from.X,$($from.Y + $MovementDirection)].GetTakingScore($allegiance)),$firstMove))
             
             if(($allegiance -eq [Allegiance]::White -and $from.Y -eq 6) -or ($allegiance -eq [Allegiance]::Black -and $from.Y -eq 1))
             {
                 if ($board[$from.X, $($from.Y + $($MovementDirection * 2))].OccupantAllegiance -eq [Allegiance]::None)
                 {
                     $secondMove = [Position]::new($from.X, $($from.Y + $MovementDirection * 2))
-                    $moves.Add([MoveVsScore]::new($secondMove,$($Tiles[$from.X,$($MovementDirection * 2)].GetTakingScore($allegiance))))
+                    $moves.Add([MoveVsScore]::new($secondMove,$($Tiles[$from.X,$($MovementDirection * 2)].GetTakingScore($allegiance)),$secondMove))
                 }
             }
             return $moves
@@ -478,7 +493,7 @@ class Pawn : PieceTypeBase
             $MovementDirection = $(If($allegiance -eq [Allegiance]::White) {-1} Else {1})
             $newPos = [Position]::new($($from.X + 1), $($from.Y + $MovementDirection))
             [int]$rScore = $board[$newPos.X, $newPos.Y].GetTakingScore($allegiance)
-            $moves.Add([MoveVsScore]::new($newPos, $rScore))
+            $moves.Add([MoveVsScore]::new($newPos, $rScore,$newPos))
             return $moves
         })
         ,[SpecialRule]::new( #Check left diagonal
@@ -496,7 +511,47 @@ class Pawn : PieceTypeBase
             $MovementDirection = $(If($allegiance -eq [Allegiance]::White) {-1} Else {1})
             $newPos = [Position]::new($($from.X - 1), $($from.Y + $MovementDirection))
             [int]$lScore = $board[$newPos.X, $newPos.Y].GetTakingScore($allegiance)
-            $moves.Add([MoveVsScore]::new($newPos, $lScore))
+            $moves.Add([MoveVsScore]::new($newPos, $lScore,$newPos))
+            return $moves
+        })
+        ,[SpecialRule]::new( #Check en passant left - requires enemy only one move to be made and it to have been a two jump. TODO Option is only available the first turn it is possible
+        {
+            param($from, $allegiance, $board)
+            $FromYPositionRequirement = $(If($allegiance -eq [Allegiance]::White) {3} Else {4}) #If our pawn is white, we can only en passant from row 4 - if our pawn is black, we can only en passant from row 5
+            if($from.Y -ne $FromYPositionRequirement){return $false}
+            $OppositeAllegiance = $(If($allegiance -eq [Allegiance]::White) {[Allegiance]::Black} Else {[Allegiance]::White})
+            $x = $from.X - 1
+            $IsEnemyPawn = $board[$x,$FromYPositionRequirement].OccupantAllegiance -eq $OppositeAllegiance -and $board[$x,$FromYPositionRequirement].OccupantPiece -eq [Pawn]
+            return $x -lt 8 -and $from.Y -eq $FromYPositionRequirement -and $IsEnemyPawn -and $board[$x,$FromYPositionRequirement].OccupantMovesMade -eq 1
+        },
+        {
+            param($from, $allegiance, $board)
+            $moves = [System.Collections.Generic.List[MoveVsScore]]::new()
+            $MovementDirection = $(If($allegiance -eq [Allegiance]::White) {-1} Else {1})
+            $newPos = [Position]::new($($from.X - 1), $($from.Y + $MovementDirection))
+            $enemyDeathPos = [Position]::new($($newPos.X), $($newPos.Y - $MovementDirection))
+            [int]$lScore = $board[$enemyDeathPos.X, $enemyDeathPos.Y].GetTakingScore($allegiance)
+            $moves.Add([MoveVsScore]::new($newPos, $lScore,$enemyDeathPos))
+            return $moves
+        })
+        ,[SpecialRule]::new( #Check en passant right - requires enemy only one move to be made and it to have been a two jump. TODO Option is only available the first turn it is possible
+        {
+            param($from, $allegiance, $board)
+            $FromYPositionRequirement = $(If($allegiance -eq [Allegiance]::White) {3} Else {4}) #If our pawn is white, we can only en passant from row 4 - if our pawn is black, we can only en passant from row 5
+            if($from.Y -ne $FromYPositionRequirement){return $false}
+            $OppositeAllegiance = $(If($allegiance -eq [Allegiance]::White) {[Allegiance]::Black} Else {[Allegiance]::White})
+            $x = $from.X + 1
+            $IsEnemyPawn = $board[$x,$FromYPositionRequirement].OccupantAllegiance -eq $OppositeAllegiance -and $board[$x,$FromYPositionRequirement].OccupantPiece -eq [Pawn]
+            return $x -lt 8 -and $from.Y -eq $FromYPositionRequirement -and $IsEnemyPawn -and $board[$x,$FromYPositionRequirement].OccupantMovesMade -eq 1
+        },
+        {
+            param($from, $allegiance, $board)
+            $moves = [System.Collections.Generic.List[MoveVsScore]]::new()
+            $MovementDirection = $(If($allegiance -eq [Allegiance]::White) {-1} Else {1})
+            $newPos = [Position]::new($($from.X + 1), $($from.Y + $MovementDirection))
+            $enemyDeathPos = [Position]::new($($newPos.X), $($newPos.Y - $MovementDirection))
+            [int]$lScore = $board[$enemyDeathPos.X, $enemyDeathPos.Y].GetTakingScore($allegiance)
+            $moves.Add([MoveVsScore]::new($newPos, $lScore,$enemyDeathPos))
             return $moves
         })
     ))
@@ -585,12 +640,14 @@ class Tile
 {
     [System.Type]$OccupantPiece
     [Allegiance]$OccupantAllegiance;
+    [int]$OccupantMovesMade;
     [bool]$IsWhiteTile;
 
     Tile($NewOccupantType,$NewOccupantAllegiance,$NewBackIsWhite)
     {
         $this.OccupantPiece = $NewOccupantType;
         $this.OccupantAllegiance = $NewOccupantAllegiance;
+        $this.OccupantMovesMade = 0
         $this.IsWhiteTile = $NewBackIsWhite;
     }
 
@@ -632,12 +689,24 @@ class Tile
     {
         if($IgnoreCheck -or $this.CheckCanMoveTo($FromPos,$ToPos,$Tiles,$MoveCache))
         {
+            [Position] $killPos = $MoveCache.GetKillPosition($FromPos,$ToPos)
+            if ($killPos -ne $null) {
+                $Tiles[$killPos.X,$killPos.Y].OccupantPiece = $null
+                $Tiles[$killPos.X,$killPos.Y].OccupantAllegiance = [Allegiance]::None
+                $Tiles[$killPos.X,$killPos.Y].OccupantMovesMade = 0
+            }
+            
             #Swap Pieces
             $Tiles[$ToPos.X,$ToPos.Y].OccupantPiece = $this.OccupantPiece;
             $this.OccupantPiece = $null;
-            $newAllegiance = $this.OccupantAllegiance
+            
+            $newAllegiance = $this.OccupantAllegiance;
             $Tiles[$ToPos.X,$ToPos.Y].OccupantAllegiance = $newAllegiance;
             $this.OccupantAllegiance = [Allegiance]::None;
+
+            $newMovesMade = $this.OccupantMovesMade + 1;
+            $Tiles[$ToPos.X,$ToPos.Y].OccupantMovesMade = $newMovesMade;
+            $this.OccupantMovesMade = 0;
             
             #Do post move effect e.g become queen if pawn 
             $Tiles[$ToPos.X,$ToPos.Y].OccupantPiece::PostMove.DoEffect($ToPos,$newAllegiance,$Tiles)
@@ -768,7 +837,7 @@ $whitesTurn = $true
 $AiEnabled = $true
 while($continue)
 {
-    Clear-Host
+    #Clear-Host
     $AIDepth = $(If($whitesTurn -or (-not $AiEnabled)) {1} Else {2});
 
     Write-Host $(If($whitesTurn) {"Your Turn"} Else {"Enemy Thinking..."});
@@ -818,7 +887,7 @@ while($continue)
                 {
                     if ($IsMoveQuery -and $Grid[$currentPosition.X, $currentPosition.Y].OccupantAllegiance -eq $( If ($whitesTurn) {[Allegiance]::White } else {[Allegiance]::Black } ))
                     {
-                        Clear-Host
+                        #Clear-Host
                         Write-Host $(If($whitesTurn) {"Your Turn"} Else {"Enemy Thinking..."});
 
                         DrawGrid $Grid ([ref]$moveCache) $currentPosition
