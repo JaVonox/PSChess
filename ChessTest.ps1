@@ -250,7 +250,7 @@ class MoveCache
                         }
 
                         # Now check if this move would lose our king AFTER all scoring is done
-                        if($moveScore -lt -600)  # Remove depth check, just look at final score
+                        if($moveScore -lt -600) 
                         {
                             continue  # Skip this move as it loses our king
                         }
@@ -301,15 +301,13 @@ class MoveCache
         $OpponentAllegiance = $(If($PlayerAllegiance -eq [Allegiance]::White) {[Allegiance]::Black} else {[Allegiance]::White})
         [int]$NewDepth = $this.SearchDepth - 1
 
-        # Get the base score from deeper analysis
         $depthScore = $CacheInstance.UpdateCache($OpponentAllegiance, $TilesInstance, $NewDepth,$MoveCounter)
         
         if($this.IsKingInCheck($PlayerAllegiance, $MyKingPos, $TilesInstance))
         {
             $depthScore += 200
         }
-
-        #Write-Host "Depth $($this.SearchDepth) Score: $depthScore "
+        
         return -$depthScore
     }
 
@@ -717,7 +715,37 @@ function ParseNotation([string]$notation,[ref]$ToPos,[ref]$FromPos,[ref]$TargetP
     {
         return $false
     }
+}
 
+function DrawGrid([Tile[,]]$Tiles,[ref]$moveCache,[Position]$queryPosition)
+{
+    
+    [bool]$IsMoveQuery = $($queryPosition -ne $null)
+    
+    Write-Host " a b c d e f g h ";
+
+    For ($y = 0; $y -le 7;$y++)
+    {
+        Write-Host $([Math]::Abs($y-8)) -NoNewLine
+        For ($x = 0; $x -le 7;$x++)
+        {
+            $output = $Tiles[$x,$y].GetIcon() + " "
+
+            [System.ConsoleColor]$colour = [System.ConsoleColor]::White
+            if($IsMoveQuery -and $moveCache.Value.IsValidMove($queryPosition,[Position]::new($x, $y)))
+            {
+                $colour = [System.ConsoleColor]::Cyan
+            }
+            else
+            {
+                $colour = $(If($Tiles[$x,$y].IsWhiteTile){[System.ConsoleColor]::DarkYellow}else{[System.ConsoleColor]::DarkRed})
+            }
+            
+            [System.ConsoleColor]$pieceColour = $(If($Tiles[$x,$y].OccupantAllegiance -eq [Allegiance]::White){[System.ConsoleColor]::White}else{[System.ConsoleColor]::Black})
+            Write-Host $output -NoNewLine -BackgroundColor $colour -ForegroundColor $pieceColour
+        }
+        Write-Host " "
+    }
 }
 
 
@@ -749,20 +777,7 @@ while($continue)
     $maxScore = $moveCache.UpdateCache($(If($whitesTurn){[Allegiance]::White}else{[Allegiance]::Black}),$Grid,$AIDepth,[ref]$totalMoves)
     Write-Host "Analysed $totalMoves Moves maxScore $maxScore"
     
-    Write-Host " a b c d e f g h ";
-
-    For ($y = 0; $y -le 7;$y++)
-    {
-        Write-Host $([Math]::Abs($y-8)) -NoNewLine
-        For ($x = 0; $x -le 7;$x++)
-        {
-            $output = $Grid[$x,$y].GetIcon() + " "
-            [System.ConsoleColor]$colour = $(If($Grid[$x,$y].IsWhiteTile){[System.ConsoleColor]::DarkYellow}else{[System.ConsoleColor]::DarkRed})
-            [System.ConsoleColor]$pieceColour = $(If($Grid[$x,$y].OccupantAllegiance -eq [Allegiance]::White){[System.ConsoleColor]::White}else{[System.ConsoleColor]::Black})
-            Write-Host $output -NoNewLine -BackgroundColor $colour -ForegroundColor $pieceColour
-        }
-        Write-Host " "
-    }
+    DrawGrid $Grid ([ref]$moveCache) $null
 
     if($maxScore -eq [float]::MinValue) #If there is no moves left
     {
@@ -804,50 +819,9 @@ while($continue)
                     if ($IsMoveQuery -and $Grid[$currentPosition.X, $currentPosition.Y].OccupantAllegiance -eq $( If ($whitesTurn) {[Allegiance]::White } else {[Allegiance]::Black } ))
                     {
                         Clear-Host
-                        Write-Host $( If ($whitesTurn)
-                        {
-                            "Whites Turn"
-                        }
-                        Else
-                        {
-                            "Blacks Turn"
-                        } );
-                        Write-Host " a b c d e f g h "
-                        For ($y = 0; $y -le 7; $y++)
-                        {
-                            Write-Host $([Math]::Abs($y - 8) ) -NoNewLine
-                            For ($x = 0; $x -le 7; $x++)
-                            {
-                                [System.ConsoleColor]$colour = $( If ( $moveCache.IsValidMove($currentPosition,[Position]::new($x, $y)))
-                                {
-                                    [System.ConsoleColor]::Blue
-                                }
-                                else
-                                {
-                                    If ($Grid[$x, $y].IsWhiteTile)
-                                    {
-                                        [System.ConsoleColor]::DarkYellow
-                                    }
-                                    else
-                                    {
-                                        [System.ConsoleColor]::DarkRed
-                                    }
-                                } )
-                                [System.ConsoleColor]$pieceColour = $( If ($Grid[$x, $y].OccupantAllegiance -eq [Allegiance]::White)
-                                {
-                                    [System.ConsoleColor]::White
-                                }
-                                else
-                                {
-                                    [System.ConsoleColor]::Black
-                                } )
-                                $output = $Grid[$x, $y].GetIcon() + " "
-                                Write-Host $output -NoNewLine -BackgroundColor $colour -ForegroundColor $pieceColour
+                        Write-Host $(If($whitesTurn) {"Your Turn"} Else {"Enemy Thinking..."});
 
-                            }
-                            Write-Host " "
-
-                        }
+                        DrawGrid $Grid ([ref]$moveCache) $currentPosition
                     }
                     else
                     {
