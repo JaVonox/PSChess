@@ -517,12 +517,13 @@ class Pawn : PieceTypeBase
         ,[SpecialRule]::new( #Check en passant left - requires enemy only one move to be made and it to have been a two jump. TODO Option is only available the first turn it is possible
         {
             param($from, $allegiance, $board)
+            $MovementDirection = $(If($allegiance -eq [Allegiance]::White) {-1} Else {1})
             $FromYPositionRequirement = $(If($allegiance -eq [Allegiance]::White) {3} Else {4}) #If our pawn is white, we can only en passant from row 4 - if our pawn is black, we can only en passant from row 5
             if($from.Y -ne $FromYPositionRequirement){return $false}
             $OppositeAllegiance = $(If($allegiance -eq [Allegiance]::White) {[Allegiance]::Black} Else {[Allegiance]::White})
             $x = $from.X - 1
             $IsEnemyPawn = $board[$x,$FromYPositionRequirement].OccupantAllegiance -eq $OppositeAllegiance -and $board[$x,$FromYPositionRequirement].OccupantPiece -eq [Pawn]
-            return $x -lt 8 -and $from.Y -eq $FromYPositionRequirement -and $IsEnemyPawn -and $board[$x,$FromYPositionRequirement].OccupantMovesMade -eq 1
+            return $x -lt 8 -and $from.Y -eq $FromYPositionRequirement -and $IsEnemyPawn -and $board[$x,$FromYPositionRequirement].OccupantMovesMade -eq 1 -and $board[$x,$($from.Y + $MovementDirection)].OccupantAllegiance -eq [Allegiance]::None
         },
         {
             param($from, $allegiance, $board)
@@ -537,12 +538,13 @@ class Pawn : PieceTypeBase
         ,[SpecialRule]::new( #Check en passant right - requires enemy only one move to be made and it to have been a two jump. TODO Option is only available the first turn it is possible
         {
             param($from, $allegiance, $board)
+            $MovementDirection = $(If($allegiance -eq [Allegiance]::White) {-1} Else {1})
             $FromYPositionRequirement = $(If($allegiance -eq [Allegiance]::White) {3} Else {4}) #If our pawn is white, we can only en passant from row 4 - if our pawn is black, we can only en passant from row 5
             if($from.Y -ne $FromYPositionRequirement){return $false}
             $OppositeAllegiance = $(If($allegiance -eq [Allegiance]::White) {[Allegiance]::Black} Else {[Allegiance]::White})
             $x = $from.X + 1
             $IsEnemyPawn = $board[$x,$FromYPositionRequirement].OccupantAllegiance -eq $OppositeAllegiance -and $board[$x,$FromYPositionRequirement].OccupantPiece -eq [Pawn]
-            return $x -lt 8 -and $from.Y -eq $FromYPositionRequirement -and $IsEnemyPawn -and $board[$x,$FromYPositionRequirement].OccupantMovesMade -eq 1
+            return $x -lt 8 -and $from.Y -eq $FromYPositionRequirement -and $IsEnemyPawn -and $board[$x,$FromYPositionRequirement].OccupantMovesMade -eq 1 -and $board[$x,$($from.Y + $MovementDirection)].OccupantAllegiance -eq [Allegiance]::None
         },
         {
             param($from, $allegiance, $board)
