@@ -38,7 +38,7 @@ class MoveVsScore{
         
     }
 
-    MoveVsScore([Position]$nPos,[int]$nScoreChange,[Position]$nEnemyRemovePos)
+    MoveVsScore([Position]$nPos,[float]$nScoreChange,[Position]$nEnemyRemovePos)
     {
         $this.MoveTo = $nPos
         $this.ScoreChange = $nScoreChange
@@ -248,10 +248,9 @@ class MoveCache
                         #If we have another search depth to go, append a depth score
                         if ($this.SearchDepth -gt 0)
                         {
-                            $lookAheadScore = $this.GetDepthScore($CurrentPosition, $moveTarget.MoveTo, $Tiles, $this, $PlayerAllegiance,$KingPosition, $MoveCounter,$SelectedTurn)
-                            $moveScore += $lookAheadScore
+                            $moveScore += $this.GetDepthScore($CurrentPosition, $moveTarget.MoveTo, $Tiles, $this, $PlayerAllegiance,$KingPosition, $MoveCounter,$SelectedTurn)
                         }
-
+                        
                         # Now check if this move would lose our king AFTER all scoring is done
                         if($moveScore -lt -600) 
                         {
@@ -326,7 +325,7 @@ class MoveCache
         $OpponentAllegiance = $(If($PlayerAllegiance -eq [Allegiance]::White) {[Allegiance]::Black} else {[Allegiance]::White})
         [int]$NewDepth = $this.SearchDepth - 1
         [int]$NewTurn = $SelectedTurn + 1
-        $depthScore = $CacheInstance.UpdateCache($OpponentAllegiance, $TilesInstance, $NewDepth,$MoveCounter,$NewTurn )
+        [float]$depthScore = [math]::floor($CacheInstance.UpdateCache($OpponentAllegiance, $TilesInstance, $NewDepth,$MoveCounter,$NewTurn))
         
         return -$depthScore
     }
@@ -480,7 +479,7 @@ class Pawn : PieceTypeBase
             $moves = [System.Collections.Generic.List[MoveVsScore]]::new()
             
             $firstMove = [Position]::new($from.X, $($from.Y + $MovementDirection))
-            $moves.Add([MoveVsScore]::new($firstMove,0.4,$firstMove))
+            $moves.Add([MoveVsScore]::new($firstMove,0.5,$firstMove))
             
             if(($allegiance -eq [Allegiance]::White -and $from.Y -eq 6) -or ($allegiance -eq [Allegiance]::Black -and $from.Y -eq 1))
             {
