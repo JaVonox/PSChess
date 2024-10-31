@@ -973,7 +973,24 @@ $whitesTurn = $true
 $IsDebugMode = $false
 
 $currentTurn = 0
-[System.Collections.Generic.List[Allegiance]]$AiAllegiances = @([Allegiance]::Black)
+$NumOfAI = 1
+
+[System.Collections.Generic.List[Allegiance]]$AiAllegiances = @()
+
+switch($NumOfAI)
+{
+    0 {break}
+    1 {
+       $AiAllegiances.Add($([Allegiance]$(Get-Random -Minimum 1 -Maximum 3))) 
+       break
+    }
+    default 
+    {
+        $AiAllegiances = @([Allegiance]::White,[Allegiance]::Black)
+        $IsDebugMode = $true
+        break
+    }
+}
 
 if(-not $IsDebugMode){Clear-Host}
 
