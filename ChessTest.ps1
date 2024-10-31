@@ -881,9 +881,31 @@ function ParseNotation([string]$notation,[ref]$ToPos,[ref]$FromPos,[ref]$TargetP
     }
 }
 
-function DrawGrid([Tile[,]]$Tiles,[ref]$moveCache,[Position]$queryPosition)
+function GenerateMoveText([Allegiance]$CurrentPlayerAllegiance,[System.Type]$MovedPiece,[Position]$From,[Position]$To)
 {
-    Write-Host $(If($whitesTurn) {"Your Turn (Turn $currentTurn)"} Else {"Enemy Thinking (Turn $currentTurn)..."});
+    [string]$TmpMoveName = "$CurrentPlayerAllegiance Moved: "
+
+    switch ($MovedPiece.Name)
+    {
+        'Pawn' {break}
+        'Rook' {$TmpMoveName += "R"; break}
+        'Bishop' {$TmpMoveName += "B"; break}
+        'Knight' {$TmpMoveName += "N"; break}
+        'Queen' {$TmpMoveName += "Q"; break}
+        'King' {$TmpMoveName += "K"; break}
+    }
+    
+    $TmpMoveName += [char]($From.X + 97)
+    $TmpMoveName += 8 - $From.Y
+    $TmpMoveName += [char]($To.X + 97)
+    $TmpMoveName += 8 - $To.Y
+    
+    Write-Host $TmpMoveName
+}
+
+function DrawGrid([Tile[,]]$Tiles,[ref]$moveCache,[Position]$queryPosition,[Allegiance]$ViewerAllegiance)
+{
+    Write-Host "$(If($ViewerAllegiance -eq [Allegiance]::White) {"Whites Turn"}Else{"Blacks Turn"}) (Turn $currentTurn)"
     
     [bool]$IsMoveQuery = $($queryPosition -ne $null)
     
@@ -914,6 +936,7 @@ function DrawGrid([Tile[,]]$Tiles,[ref]$moveCache,[Position]$queryPosition)
 }
 
 
+
 [Tile[,]]$Grid = New-Object 'Tile[,]' 8,8
 
 [scriptBlock]$NewPattern
@@ -928,24 +951,35 @@ switch($boardType)
 GenerateBaseGrid $Grid $NewPattern
 $moveCache = [MoveCache]::new()
 
-$continue = $true
 $whitesTurn = $true
-$AiEnabled = $true
+$IsDebugMode = $false
+
 $currentTurn = 0
-while($continue)
+[System.Collections.Generic.List[Allegiance]]$AiAllegiances = @([Allegiance]::Black)
+
+Clear-Host
+
+while($true)
 {
     $currentTurn++
-    #Clear-Host
-    $AIDepth = $(If($whitesTurn -or (-not $AiEnabled)) {1} Else {2});
-
-    Write-Host $(If($whitesTurn) {"Your Turn (Turn $currentTurn)"} Else {"Enemy Thinking (Turn $currentTurn)..."});
+    $PlayerAllegiance = $(If($whitesTurn){[Allegiance]::White}else{[Allegiance]::Black})
+    $IsAI = $AiAllegiances.Contains($PlayerAllegiance)
+    $AIDepth = $(If($IsAI) {2} Else {1});
     
     $totalMoves = 0
-    $maxScore = $moveCache.UpdateCache($(If($whitesTurn){[Allegiance]::White}else{[Allegiance]::Black}),$Grid,$AIDepth,[ref]$totalMoves,$currentTurn)
-    Write-Host "Analysed $totalMoves Moves maxScore $maxScore"
-    
-    DrawGrid $Grid ([ref]$moveCache) $null
+    $maxScore = $moveCache.UpdateCache($PlayerAllegiance,$Grid,$AIDepth,[ref]$totalMoves,$currentTurn)
 
+    if((-not $IsAI) -or $IsDebugMode)
+    {
+        If($IsDebugMode){Write-Host "Analysed $totalMoves Moves maxScore $maxScore"}
+        
+        DrawGrid $Grid ([ref]$moveCache) $null $PlayerAllegiance
+    }
+    else
+    {
+        Clear-Host
+    }
+    
     if($maxScore -eq [float]::MinValue) #If there is no moves left
     {
         $winner = $(If($whitesTurn){"Black"}else{"White"})
@@ -953,7 +987,7 @@ while($continue)
         break;
     }
     
-    if($whitesTurn -or (-not $AiEnabled))
+    if(-not $IsAI)
     {
         while ($true)
         {
@@ -962,33 +996,30 @@ while($continue)
 
             if ($Move -eq "AI")
             {
-                Write-Host "AI TOGGLED"
-                $AiEnabled = -not $AiEnabled
+                Write-Host "ADDED AI FOR $PlayerAllegiance"
+                $AiAllegiances.Add($PlayerAllegiance)
+                $IsDebugMode = $true
+                break
             }
 
             if ($Move -eq "exit")
             {
-                $continue = $false;
-                break;
+                exit
             }
             else
             {
-                #Target for movement
                 [Position]$selectedTarget = [Position]::new(0, 0)
-                #Current Position
                 [Position]$currentPosition = [Position]::new(0, 0)
-                #Expected Piece
                 $selectedTargetPiece = $null
-                #If Move Query
                 [bool]$IsMoveQuery = $true
+                
+                
                 if (ParseNotation $Move ([ref]$selectedTarget) ([ref]$currentPosition) ([ref]$selectedTargetPiece) ([ref]$IsMoveQuery))
                 {
                     if ($IsMoveQuery -and $Grid[$currentPosition.X, $currentPosition.Y].OccupantAllegiance -eq $( If ($whitesTurn) {[Allegiance]::White } else {[Allegiance]::Black } ))
                     {
-                        #Clear-Host
-                        Write-Host $(If($whitesTurn) {"Your Turn ($currentTurn)"} Else {"Enemy Thinking ($currentTurn)..."});
-
-                        DrawGrid $Grid ([ref]$moveCache) $currentPosition
+                        if(-not $IsDebugMode){Clear-Host}
+                        DrawGrid $Grid ([ref]$moveCache) $currentPosition $PlayerAllegiance
                         Write-Host "Piece: $($Grid[$currentPosition.X,$currentPosition.Y].OccupantAllegiance) $($Grid[$currentPosition.X,$currentPosition.Y].OccupantPiece) (Last Moved Turn: $($Grid[$currentPosition.X,$currentPosition.Y].OccupantLastMovedTurn))"
                     }
                     else
@@ -996,32 +1027,46 @@ while($continue)
                         if ($Grid[$currentPosition.X, $currentPosition.Y].MovePiece($currentPosition, $selectedTarget, $Grid, $moveCache,$false,$currentTurn))
                         {
                             $whitesTurn = -not $whitesTurn;
+                            GenerateMoveText $PlayerAllegiance $($Grid[$currentPosition.X,$currentPosition.Y].OccupantPiece) $currentPosition $selectedTarget
+                            
+                            [Allegiance]$EnemyAllegiance = $(If($whitesTurn){[Allegiance]::White}else{[Allegiance]::Black})
+                            
+                            If($AiAllegiances.Contains($EnemyAllegiance))
+                            {
+                                Write-Host "$EnemyAllegiance is Thinking..."
+                            }
+                            
                             break;
                         }
                         else
                         {
-                            echo "Invalid Move";
+                            Write-Host "Invalid Move";
                         }
                     }
                 }
                 else
                 {
-                    echo "Syntax Error. Use Format Ka1b2";
+                    Write-Host "Syntax Error. Use Format Ka1b2";
                 }
             }
         }
     }
     else #AI Turn
     {
-        #selectedPosition
         [Position]$AIselectedTarget = [Position]::new(0, 0)
-        #Current Position
         [Position]$AIcurrentPosition = [Position]::new(0, 0)
-        $moveCache.GetAIMove([ref]$AIcurrentPosition,[ref]$AIselectedTarget)
-        Write-Host "AI MOVE $($Grid[$AIcurrentPosition.X,$AIcurrentPosition.Y].OccupantPiece) FROM $($AIcurrentPosition.X),$($AIcurrentPosition.Y) to $($AIselectedTarget.X),$($AIselectedTarget.Y)"
+        
+        if(-not $moveCache.GetAIMove([ref]$AIcurrentPosition,[ref]$AIselectedTarget))
+        {
+            Write-Host "BAD MOVE" Background-Color [System.ConsoleColor]::DarkRed
+            break
+        }
+        
+        GenerateMoveText $PlayerAllegiance $($Grid[$AIcurrentPosition.X,$AIcurrentPosition.Y].OccupantPiece) $AIcurrentPosition $AIselectedTarget
+
         if (-not $Grid[$AIcurrentPosition.X, $AIcurrentPosition.Y].MovePiece($AIcurrentPosition, $AIselectedTarget, $Grid, $moveCache,$false,$currentTurn))
         {
-            Write-Host "BAD MOVE" Background-Color [System.ConsoleColor]::DarkRef
+            Write-Host "BAD MOVE" Background-Color [System.ConsoleColor]::DarkRed
             break
         }
         $whitesTurn = -not $whitesTurn;
