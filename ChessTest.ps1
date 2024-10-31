@@ -52,7 +52,7 @@ class MoveVsScore{
 }
 
 class IMoveRule {
-    [System.Collections.Generic.List[MoveVsScore]] GetPossibleMoves([Position]$from, [Allegiance]$allegiance, $board,[int]$SelectedTurn) {
+    [System.Collections.Generic.List[MoveVsScore]] GetPossibleMoves([Position]$from, [Allegiance]$allegiance, $board,[int]$SelectedTurn,$Cache) {
         throw "Must be implemented"
     }
 }
@@ -72,7 +72,7 @@ class DirectionalRule : IMoveRule
         $this.Repeating = $repeating;
     }
 
-    [System.Collections.Generic.List[MoveVsScore]] GetPossibleMoves([Position]$from,[Allegiance]$myAllegiance,$board,[int]$SelectedTurn)
+    [System.Collections.Generic.List[MoveVsScore]] GetPossibleMoves([Position]$from,[Allegiance]$myAllegiance,$board,[int]$SelectedTurn,$Cache)
     {
         $moves = [System.Collections.Generic.List[MoveVsScore]]::new()
         $x = $from.x + $this.DirX;
@@ -116,10 +116,10 @@ class SpecialRule : IMoveRule
         $this.MoveGenerator = $newMoveGen;
     }
 
-    [System.Collections.Generic.List[MoveVsScore]] GetPossibleMoves([Position]$from, [Allegiance]$allegiance, $board,[int]$SelectedTurn) {
-        if(& $this.Condition $from $allegiance $board $SelectedTurn) #& operator executes $this.Condition as a script using the parameters given
+    [System.Collections.Generic.List[MoveVsScore]] GetPossibleMoves([Position]$from, [Allegiance]$allegiance, $board,[int]$SelectedTurn,$Cache) {
+        if(& $this.Condition $from $allegiance $board $SelectedTurn $Cache) #& operator executes $this.Condition as a script using the parameters given
         {
-            return & $this.MoveGenerator $from $allegiance $board $SelectedTurn
+            return & $this.MoveGenerator $from $allegiance $board $SelectedTurn $Cache
         }
         return [System.Collections.Generic.List[MoveVsScore]]::new();
     }
@@ -134,11 +134,11 @@ class CompositeRule : IMoveRule
         $this.Rules = $ComponentRules
     }
 
-    [System.Collections.Generic.List[MoveVsScore]] GetPossibleMoves([Position]$from, [Allegiance]$allegiance, $board,[int]$SelectedTurn) {
+    [System.Collections.Generic.List[MoveVsScore]] GetPossibleMoves([Position]$from, [Allegiance]$allegiance, $board,[int]$SelectedTurn,$Cache) {
         $allMoves = [System.Collections.Generic.List[MoveVsScore]]::new()
         foreach($rule in $this.Rules)
         {
-            $moves = $rule.GetPossibleMoves($from,$allegiance,$board,$SelectedTurn)
+            $moves = $rule.GetPossibleMoves($from,$allegiance,$board,$SelectedTurn,$Cache)
             foreach($move in $moves)
             {
                 $allMoves.Add($move)
@@ -238,7 +238,7 @@ class MoveCache
                 if ($PlayerAllegiance -eq $Tiles[$x, $y].OccupantAllegiance)
                 {
                     $CurrentPosition = [Position]::new($x, $y)
-                    [System.Collections.Generic.List[MoveVsScore]]$moves = $Tiles[$x, $y].GetMoves($CurrentPosition, $PlayerAllegiance, $Tiles,$SelectedTurn)
+                    [System.Collections.Generic.List[MoveVsScore]]$moves = $Tiles[$x, $y].GetMoves($CurrentPosition, $PlayerAllegiance, $Tiles,$SelectedTurn,$this)
 
                     foreach ($moveTarget in $moves)
                     {
@@ -320,7 +320,7 @@ class MoveCache
         }
 
         # Check if our king is in check after this move
-        if($this.IsKingInCheck($PlayerAllegiance, $ActualKingPos, $TilesInstance))
+        if($this.IsPositionAttacked($PlayerAllegiance, $ActualKingPos, $TilesInstance))
         {
             return -900
         }
@@ -347,7 +347,7 @@ class MoveCache
         return $false
     }
 
-    hidden [bool] IsKingInCheck([Allegiance]$kingAllegiance, [Position]$kingPos, [Tile[,]]$board) {
+    hidden [bool] IsPositionAttacked([Allegiance]$kingAllegiance, [Position]$TargetPos, [Tile[,]]$board) {
         $opponentAllegiance = $(If($kingAllegiance -eq [Allegiance]::White) {[Allegiance]::Black} else {[Allegiance]::White})
 
         # Check diagonal rays (Bishop/Queen)
@@ -355,8 +355,8 @@ class MoveCache
             @(1,1), @(1,-1), @(-1,1), @(-1,-1)
         )
         foreach ($ray in $diagonalRays) {
-            $x = $kingPos.X
-            $y = $kingPos.Y
+            $x = $TargetPos.X
+            $y = $TargetPos.Y
 
             while ($true) {
                 $x += $ray[0]
@@ -382,8 +382,8 @@ class MoveCache
             @(0,1), @(0,-1), @(1,0), @(-1,0)
         )
         foreach ($ray in $straightRays) {
-            $x = $kingPos.X
-            $y = $kingPos.Y
+            $x = $TargetPos.X
+            $y = $TargetPos.Y
 
             while ($true) {
                 $x += $ray[0]
@@ -410,8 +410,8 @@ class MoveCache
             @(1,-2), @(1,2), @(2,-1), @(2,1)
         )
         foreach ($move in $knightMoves) {
-            $x = $kingPos.X + $move[0]
-            $y = $kingPos.Y + $move[1]
+            $x = $TargetPos.X + $move[0]
+            $y = $TargetPos.Y + $move[1]
 
             if ($x -ge 0 -and $x -le 7 -and $y -ge 0 -and $y -le 7) {
                 $piece = $board[$x,$y].OccupantPiece
@@ -430,8 +430,8 @@ class MoveCache
             @(1, -$pawnDirection)
         )
         foreach ($attack in $pawnAttacks) {
-            $x = $kingPos.X + $attack[0]
-            $y = $kingPos.Y + $attack[1]
+            $x = $TargetPos.X + $attack[0]
+            $y = $TargetPos.Y + $attack[1]
 
             if ($x -ge 0 -and $x -le 7 -and $y -ge 0 -and $y -le 7) {
                 $piece = $board[$x,$y].OccupantPiece
@@ -476,10 +476,10 @@ class Pawn : PieceTypeBase
     static [CompositeRule]$PieceRules = [CompositeRule]::new(@([SpecialRule]::new(
     {
         #pawn moves away from its own side and can move twice on first turn
-        param($from, $allegiance, $board,[int]$SelectedTurn) $true
+        param($from, $allegiance, $board,[int]$SelectedTurn,$Cache) $true
     },
     {
-        param($from, $allegiance, $board,[int]$SelectedTurn)
+        param($from, $allegiance, $board,[int]$SelectedTurn,$Cache)
         $MovementDirection = $(If($allegiance -eq [Allegiance]::White) {-1} Else {1})
         if ($board[$from.X, $($from.Y + $MovementDirection)].OccupantAllegiance -eq [Allegiance]::None)
         {
@@ -501,7 +501,7 @@ class Pawn : PieceTypeBase
         return [System.Collections.Generic.List[MoveVsScore]]::new()
     }),[SpecialRule]::new( #Check right diagonal
         { 
-            param($from, $allegiance, $board,[int]$SelectedTurn)
+            param($from, $allegiance, $board,[int]$SelectedTurn,$Cache)
             $MovementDirection = $(If($allegiance -eq [Allegiance]::White) {-1} Else {1})
             $OppositeAllegiance = $(If($allegiance -eq [Allegiance]::White) {[Allegiance]::Black} Else {[Allegiance]::White})
             $x = $from.X + 1 
@@ -509,7 +509,7 @@ class Pawn : PieceTypeBase
             return $x -ge 0 -and $x -lt 8 -and $y -ge 0 -and $y -lt 8 -and $board[$x,$y].OccupantAllegiance -eq $OppositeAllegiance
         },
         {
-            param($from, $allegiance, $board,[int]$SelectedTurn)
+            param($from, $allegiance, $board,[int]$SelectedTurn,$Cache)
             $moves = [System.Collections.Generic.List[MoveVsScore]]::new()
             $MovementDirection = $(If($allegiance -eq [Allegiance]::White) {-1} Else {1})
             $newPos = [Position]::new($($from.X + 1), $($from.Y + $MovementDirection))
@@ -519,7 +519,7 @@ class Pawn : PieceTypeBase
         })
         ,[SpecialRule]::new( #Check left diagonal
         {
-            param($from, $allegiance, $board,[int]$SelectedTurn)
+            param($from, $allegiance, $board,[int]$SelectedTurn,$Cache)
             $MovementDirection = $(If($allegiance -eq [Allegiance]::White) {-1} Else {1})
             $OppositeAllegiance = $(If($allegiance -eq [Allegiance]::White) {[Allegiance]::Black} Else {[Allegiance]::White})
             $x = $from.X - 1
@@ -527,7 +527,7 @@ class Pawn : PieceTypeBase
             return $x -ge 0 -and $x -lt 8 -and $y -ge 0 -and $y -lt 8 -and $board[$x,$y].OccupantAllegiance -eq $OppositeAllegiance
         },
         {
-            param($from, $allegiance, $board,[int]$SelectedTurn)
+            param($from, $allegiance, $board,[int]$SelectedTurn,$Cache)
             $moves = [System.Collections.Generic.List[MoveVsScore]]::new()
             $MovementDirection = $(If($allegiance -eq [Allegiance]::White) {-1} Else {1})
             $newPos = [Position]::new($($from.X - 1), $($from.Y + $MovementDirection))
@@ -537,7 +537,7 @@ class Pawn : PieceTypeBase
         })
         ,[SpecialRule]::new( #Check en passant left
         {
-            param($from, $allegiance, $board,[int]$SelectedTurn)
+            param($from, $allegiance, $board,[int]$SelectedTurn,$Cache)
             $MovementDirection = $(If($allegiance -eq [Allegiance]::White) {-1} Else {1})
             $FromYPositionRequirement = $(If($allegiance -eq [Allegiance]::White) {3} Else {4}) #If our pawn is white, we can only en passant from row 4 - if our pawn is black, we can only en passant from row 5
             if($from.Y -ne $FromYPositionRequirement){return $false}
@@ -548,7 +548,7 @@ class Pawn : PieceTypeBase
             return $x -lt 8 -and $from.Y -eq $FromYPositionRequirement -and $IsEnemyPawn -and $IsCorrectTurn -and $board[$x,$($from.Y + $MovementDirection)].OccupantAllegiance -eq [Allegiance]::None
         },
         {
-            param($from, $allegiance, $board,[int]$SelectedTurn)
+            param($from, $allegiance, $board,[int]$SelectedTurn,$Cache)
             $moves = [System.Collections.Generic.List[MoveVsScore]]::new()
             $MovementDirection = $(If($allegiance -eq [Allegiance]::White) {-1} Else {1})
             $newPos = [Position]::new($($from.X - 1), $($from.Y + $MovementDirection))
@@ -559,7 +559,7 @@ class Pawn : PieceTypeBase
         })
         ,[SpecialRule]::new( #Check en passant right
         {
-            param($from, $allegiance, $board,[int]$SelectedTurn)
+            param($from, $allegiance, $board,[int]$SelectedTurn,$Cache)
             $MovementDirection = $(If($allegiance -eq [Allegiance]::White) {-1} Else {1})
             $FromYPositionRequirement = $(If($allegiance -eq [Allegiance]::White) {3} Else {4}) #If our pawn is white, we can only en passant from row 4 - if our pawn is black, we can only en passant from row 5
             if($from.Y -ne $FromYPositionRequirement){return $false}
@@ -570,7 +570,7 @@ class Pawn : PieceTypeBase
             return $x -lt 8 -and $from.Y -eq $FromYPositionRequirement -and $IsEnemyPawn -and $IsCorrectTurn -and $board[$x,$($from.Y + $MovementDirection)].OccupantAllegiance -eq [Allegiance]::None
         },
         {
-            param($from, $allegiance, $board,[int]$SelectedTurn)
+            param($from, $allegiance, $board,[int]$SelectedTurn,$Cache)
             $moves = [System.Collections.Generic.List[MoveVsScore]]::new()
             $MovementDirection = $(If($allegiance -eq [Allegiance]::White) {-1} Else {1})
             $newPos = [Position]::new($($from.X + 1), $($from.Y + $MovementDirection))
@@ -634,16 +634,29 @@ class King : PieceTypeBase
         [DirectionalRule]::new(1, -1, $false),
         [DirectionalRule]::new(-1, 1, $false),
         [DirectionalRule]::new(-1, -1, $false)
-        ,[SpecialRule]::new( #Castle Left #TODO spaces inbetween cannot be an attackable position, king is not currently in check
+        ,[SpecialRule]::new( #Castle Left
         {
-            param($from, $allegiance, $board,[int]$SelectedTurn)
-            if($board[$from.X,$from.Y].OccupantLastMovedTurn -eq 0)
+            param($from, $allegiance, $board,[int]$SelectedTurn,$Cache)
+            if($board[$from.X,$from.Y].OccupantLastMovedTurn -ne 0) {return $false}
+            if(-not $($board[$($from.X-4),$from.Y].OccupantPiece -eq [Rook] -and $board[$($from.X-4),$from.Y].OccupantAllegiance -eq $allegiance -and $board[$($from.X-4),$from.Y].OccupantLastMovedTurn -eq 0 )) {return $false}
+            
+            if($Cache.IsPositionAttacked($allegiance,[Position]::new($from.X,$from.Y),$board)){return $false} #Check If we are in check
+            
+            for($x = -1; $x -ge -3; $x--) #Check if all positions are free and are not attacked
             {
-                [bool]$FreeTiles = $($board[$($from.X-1),$from.Y].OccupantAllegiance -eq [Allegiance]::None -and $board[$($from.X-2),$from.Y].OccupantAllegiance -eq [Allegiance]::None -and $board[$($from.X-3),$from.Y].OccupantAllegiance -eq [Allegiance]::None)
-                [bool]$RookExists = $($board[$($from.X-4),$from.Y].OccupantPiece -eq [Rook] -and $board[$($from.X-4),$from.Y].OccupantAllegiance -eq $allegiance -and $board[$($from.X-4),$from.Y].OccupantLastMovedTurn -eq 0 )
-                return $FreeTiles -and $RookExists
+                $evalX = $($from.X+$x)
+                if($board[$evalX,$from.Y].OccupantAllegiance -eq [Allegiance]::None -and (-not $Cache.IsPositionAttacked($allegiance,[Position]::new($evalX,$from.Y),$board)))
+                {
+                    
+                }
+                else
+                {
+                    return $false
+                }
+
             }
-            return $false
+            return $true
+
         },
         {
             param($from, $allegiance, $board,[int]$SelectedTurn)
@@ -654,16 +667,28 @@ class King : PieceTypeBase
             $moves.Add([MoveVsScore]::new($newPos, 0.5,$removedRookPos,$true,$addedRookPos))
             return $moves
         })
-        ,[SpecialRule]::new( #Castle Right #TODO spaces inbetween cannot be an attackable position, king is not currently in check
+        ,[SpecialRule]::new( #Castle Right
         {
-            param($from, $allegiance, $board,[int]$SelectedTurn)
-            if($board[$from.X,$from.Y].OccupantLastMovedTurn -eq 0)
+            param($from, $allegiance, $board,[int]$SelectedTurn,$Cache)
+            if($board[$from.X,$from.Y].OccupantLastMovedTurn -ne 0) {return $false}
+            if(-not $($board[$($from.X+3),$from.Y].OccupantPiece -eq [Rook] -and $board[$($from.X+3),$from.Y].OccupantAllegiance -eq $allegiance -and $board[$($from.X+3),$from.Y].OccupantLastMovedTurn -eq 0 )) {return $false}
+
+            if($Cache.IsPositionAttacked($allegiance,[Position]::new($from.X,$from.Y),$board)){return $false} #Check If we are in check
+
+            for($x = 1; $x -le 2; $x++) #Check if all positions are free and are not attacked
             {
-                [bool]$FreeTiles = $($board[$($from.X+1),$from.Y].OccupantAllegiance -eq [Allegiance]::None -and $board[$($from.X+2),$from.Y].OccupantAllegiance -eq [Allegiance]::None)
-                [bool]$RookExists = $($board[$($from.X+3),$from.Y].OccupantPiece -eq [Rook] -and $board[$($from.X+3),$from.Y].OccupantAllegiance -eq $allegiance -and $board[$($from.X+3),$from.Y].OccupantLastMovedTurn -eq 0 )
-                return $FreeTiles -and $RookExists
+                $evalX = $($from.X+$x)
+                if($board[$evalX,$from.Y].OccupantAllegiance -eq [Allegiance]::None -and (-not $Cache.IsPositionAttacked($allegiance,[Position]::new($evalX,$from.Y),$board)))
+                {
+
+                }
+                else
+                {
+                    return $false
+                }
+
             }
-            return $false
+            return $true
         },
         {
             param($from, $allegiance, $board,[int]$SelectedTurn)
@@ -715,9 +740,9 @@ class Tile
         return $this.OccupantAllegiance -ne [Allegiance]::None -and $MoveCache.IsValidMove($FromPos,$ToPos);
     }
 
-    [System.Collections.Generic.List[MoveVsScore]] GetMoves([Position]$from, [Allegiance]$allegiance, $board,[int]$SelectedTurn)
+    [System.Collections.Generic.List[MoveVsScore]] GetMoves([Position]$from, [Allegiance]$allegiance, $board,[int]$SelectedTurn,$Cache)
     {
-        return $this.OccupantPiece::PieceRules.GetPossibleMoves($from, $allegiance, $board,$SelectedTurn)
+        return $this.OccupantPiece::PieceRules.GetPossibleMoves($from, $allegiance, $board,$SelectedTurn,$Cache)
     }
     
     [int] GetTakingScore([Allegiance]$senderAllegiance)
@@ -988,7 +1013,6 @@ while($continue)
     }
     else #AI Turn
     {
-        #TODO rarely the AI will not move
         #selectedPosition
         [Position]$AIselectedTarget = [Position]::new(0, 0)
         #Current Position
