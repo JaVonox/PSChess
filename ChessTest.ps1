@@ -255,7 +255,6 @@ class MoveCache
                             $moveScore += $this.GetDepthScore($CurrentPosition, $moveTarget.MoveTo, $Tiles, $this, $PlayerAllegiance,$KingPosition, $MoveCounter,$SelectedTurn)
                         }
                         
-                        # Now check if this move would lose our king AFTER all scoring is done
                         if($moveScore -lt -600) 
                         {
                             continue  # Skip this move as it loses our king
@@ -943,6 +942,14 @@ function DrawGrid([Tile[,]]$Tiles,[ref]$moveCache,[Position]$queryPosition,[Alle
             else
             {
                 $colour = $(If($Tiles[$x,$y].IsWhiteTile){[System.ConsoleColor]::DarkYellow}else{[System.ConsoleColor]::DarkRed})
+            }
+            
+            if($Tiles[$x,$y].OccupantAllegiance -ne [Allegiance]::None -and $Tiles[$x,$y].OccupantPiece -eq [King])
+            {
+                if($moveCache.Value.IsPositionAttacked($($Tiles[$x,$y].OccupantAllegiance),[Position]::new($x,$y),$Tiles))
+                {
+                    $colour = [System.ConsoleColor]::DarkMagenta
+                }
             }
 
             [System.ConsoleColor]$pieceColour = $(If($Tiles[$x,$y].OccupantAllegiance -eq [Allegiance]::White){[System.ConsoleColor]::White}else{[System.ConsoleColor]::Black})
