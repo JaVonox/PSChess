@@ -31,18 +31,22 @@ class Position {
 class MoveVsScore{
     [Position]$MoveTo
     [float]$ScoreChange
-    [Position]$EnemyRemovePosition
+    [Position]$TargetRemovePosition
+    [bool]$MovesTarget
+    [Position]$NewTargetPosition
 
     MoveVsScore()
     {
         
     }
 
-    MoveVsScore([Position]$nPos,[float]$nScoreChange,[Position]$nEnemyRemovePos)
+    MoveVsScore([Position]$nPos,[float]$nScoreChange,[Position]$nTargetRemovePos,[bool]$newMovesTarget,[Position]$newMovePos)
     {
         $this.MoveTo = $nPos
         $this.ScoreChange = $nScoreChange
-        $this.EnemyRemovePosition = $nEnemyRemovePos
+        $this.TargetRemovePosition = $nTargetRemovePos
+        $this.MovesTarget = $newMovesTarget
+        $this.NewTargetPosition = $newMovePos
     }
 
 }
@@ -81,12 +85,12 @@ class DirectionalRule : IMoveRule
             {
                 if($board[$x,$y].OccupantAllegiance -ne $myAllegiance)
                 {
-                    $moves.Add([MoveVsScore]::new($pos,$($board[$x,$y].GetTakingScore($myAllegiance)),$pos))
+                    $moves.Add([MoveVsScore]::new($pos,$($board[$x,$y].GetTakingScore($myAllegiance)),$pos,$false,$pos))
                 }
                 break;
             }
             
-            $moves.Add([MoveVsScore]::new($pos,0,$pos))
+            $moves.Add([MoveVsScore]::new($pos,0,$pos,$false,$pos))
             
             if(-not $this.Repeating)
             {
@@ -330,14 +334,17 @@ class MoveCache
         return -$depthScore
     }
 
-    [Position] GetKillPosition([Position]$FromPos,[Position]$ToPos)
+    [bool] GetReplacePosition([Position]$FromPos,[Position]$ToPos,[ref]$RemovePosition,[ref]$ShouldReplace,[ref]$ReplacePosition)
     {
         $moveKey = $this.GetMoveKey($FromPos, $ToPos)
         if ($this.cachedMoves.ContainsKey($moveKey))
         {
-            return $this.cachedMoves[$moveKey].EnemyRemovePosition
+            $RemovePosition.Value = $this.cachedMoves[$moveKey].TargetRemovePosition
+            $ShouldReplace.Value = $this.cachedMoves[$moveKey].MovesTarget
+            $ReplacePosition.Value = $this.cachedMoves[$moveKey].NewTargetPosition
+            return $true
         }
-        return $null
+        return $false
     }
 
     hidden [bool] IsKingInCheck([Allegiance]$kingAllegiance, [Position]$kingPos, [Tile[,]]$board) {
@@ -479,14 +486,14 @@ class Pawn : PieceTypeBase
             $moves = [System.Collections.Generic.List[MoveVsScore]]::new()
             
             $firstMove = [Position]::new($from.X, $($from.Y + $MovementDirection))
-            $moves.Add([MoveVsScore]::new($firstMove,0.5,$firstMove))
+            $moves.Add([MoveVsScore]::new($firstMove,0.5,$firstMove,$false,$firstMove))
             
             if(($allegiance -eq [Allegiance]::White -and $from.Y -eq 6) -or ($allegiance -eq [Allegiance]::Black -and $from.Y -eq 1))
             {
                 if ($board[$from.X, $($from.Y + $($MovementDirection * 2))].OccupantAllegiance -eq [Allegiance]::None)
                 {
                     $secondMove = [Position]::new($from.X, $($from.Y + $MovementDirection * 2))
-                    $moves.Add([MoveVsScore]::new($secondMove,0.5,$secondMove))
+                    $moves.Add([MoveVsScore]::new($secondMove,0.5,$secondMove,$false,$secondMove))
                 }
             }
             return $moves
@@ -507,7 +514,7 @@ class Pawn : PieceTypeBase
             $MovementDirection = $(If($allegiance -eq [Allegiance]::White) {-1} Else {1})
             $newPos = [Position]::new($($from.X + 1), $($from.Y + $MovementDirection))
             [int]$rScore = $board[$newPos.X, $newPos.Y].GetTakingScore($allegiance)
-            $moves.Add([MoveVsScore]::new($newPos, $rScore,$newPos))
+            $moves.Add([MoveVsScore]::new($newPos, $rScore,$newPos,$false,$newPos))
             return $moves
         })
         ,[SpecialRule]::new( #Check left diagonal
@@ -525,7 +532,7 @@ class Pawn : PieceTypeBase
             $MovementDirection = $(If($allegiance -eq [Allegiance]::White) {-1} Else {1})
             $newPos = [Position]::new($($from.X - 1), $($from.Y + $MovementDirection))
             [int]$lScore = $board[$newPos.X, $newPos.Y].GetTakingScore($allegiance)
-            $moves.Add([MoveVsScore]::new($newPos, $lScore,$newPos))
+            $moves.Add([MoveVsScore]::new($newPos, $lScore,$newPos,$false,$newPos))
             return $moves
         })
         ,[SpecialRule]::new( #Check en passant left
@@ -547,7 +554,7 @@ class Pawn : PieceTypeBase
             $newPos = [Position]::new($($from.X - 1), $($from.Y + $MovementDirection))
             $enemyDeathPos = [Position]::new($($newPos.X), $($newPos.Y - $MovementDirection))
             [int]$lScore = $board[$enemyDeathPos.X, $enemyDeathPos.Y].GetTakingScore($allegiance) + 0.5
-            $moves.Add([MoveVsScore]::new($newPos, $lScore,$enemyDeathPos))
+            $moves.Add([MoveVsScore]::new($newPos, $lScore,$enemyDeathPos,$false,$newPos))
             return $moves
         })
         ,[SpecialRule]::new( #Check en passant right
@@ -569,7 +576,7 @@ class Pawn : PieceTypeBase
             $newPos = [Position]::new($($from.X + 1), $($from.Y + $MovementDirection))
             $enemyDeathPos = [Position]::new($($newPos.X), $($newPos.Y - $MovementDirection))
             [int]$rScore = $board[$enemyDeathPos.X, $enemyDeathPos.Y].GetTakingScore($allegiance) + 0.5
-            $moves.Add([MoveVsScore]::new($newPos, $rScore,$enemyDeathPos))
+            $moves.Add([MoveVsScore]::new($newPos, $rScore,$enemyDeathPos,$false,$newPos))
             return $moves
         })
     ))
@@ -592,8 +599,6 @@ class Rook : PieceTypeBase
     static [CompositeRule]$PieceRules = [CompositeRule]::new(@([DirectionalRule]::new(1,0,$true),[DirectionalRule]::new(-1,0,$true),
     [DirectionalRule]::new(0,1,$true),[DirectionalRule]::new(0,-1,$true)));
     static [PostMoveEffect]$PostMove = [PostMoveEffect]::new({param($newPosition, $allegiance, $board)return $false},{param($newPosition, $allegiance, $board)},0)
-    
-    #TODO ADD CASTLING
 }
 
 class Knight : PieceTypeBase
@@ -629,10 +634,48 @@ class King : PieceTypeBase
         [DirectionalRule]::new(1, -1, $false),
         [DirectionalRule]::new(-1, 1, $false),
         [DirectionalRule]::new(-1, -1, $false)
+        ,[SpecialRule]::new( #Castle Left #TODO spaces inbetween cannot be an attackable position, king is not currently in check
+        {
+            param($from, $allegiance, $board,[int]$SelectedTurn)
+            if($board[$from.X,$from.Y].OccupantLastMovedTurn -eq 0)
+            {
+                [bool]$FreeTiles = $($board[$($from.X-1),$from.Y].OccupantAllegiance -eq [Allegiance]::None -and $board[$($from.X-2),$from.Y].OccupantAllegiance -eq [Allegiance]::None -and $board[$($from.X-3),$from.Y].OccupantAllegiance -eq [Allegiance]::None)
+                [bool]$RookExists = $($board[$($from.X-4),$from.Y].OccupantPiece -eq [Rook] -and $board[$($from.X-4),$from.Y].OccupantAllegiance -eq $allegiance -and $board[$($from.X-4),$from.Y].OccupantLastMovedTurn -eq 0 )
+                return $FreeTiles -and $RookExists
+            }
+            return $false
+        },
+        {
+            param($from, $allegiance, $board,[int]$SelectedTurn)
+            $moves = [System.Collections.Generic.List[MoveVsScore]]::new()
+            $newPos = [Position]::new($($from.X - 2), $($from.Y))
+            $removedRookPos = [Position]::new($($newPos.X - 2), $($newPos.Y))
+            $addedRookPos = [Position]::new($($newPos.X + 1), $($newPos.Y))
+            $moves.Add([MoveVsScore]::new($newPos, 0.5,$removedRookPos,$true,$addedRookPos))
+            return $moves
+        })
+        ,[SpecialRule]::new( #Castle Right #TODO spaces inbetween cannot be an attackable position, king is not currently in check
+        {
+            param($from, $allegiance, $board,[int]$SelectedTurn)
+            if($board[$from.X,$from.Y].OccupantLastMovedTurn -eq 0)
+            {
+                [bool]$FreeTiles = $($board[$($from.X+1),$from.Y].OccupantAllegiance -eq [Allegiance]::None -and $board[$($from.X+2),$from.Y].OccupantAllegiance -eq [Allegiance]::None)
+                [bool]$RookExists = $($board[$($from.X+3),$from.Y].OccupantPiece -eq [Rook] -and $board[$($from.X+3),$from.Y].OccupantAllegiance -eq $allegiance -and $board[$($from.X+3),$from.Y].OccupantLastMovedTurn -eq 0 )
+                return $FreeTiles -and $RookExists
+            }
+            return $false
+        },
+        {
+            param($from, $allegiance, $board,[int]$SelectedTurn)
+            $moves = [System.Collections.Generic.List[MoveVsScore]]::new()
+            $newPos = [Position]::new($($from.X + 2), $($from.Y))
+            $removedRookPos = [Position]::new($($newPos.X + 1), $($newPos.Y))
+            $addedRookPos = [Position]::new($($newPos.X - 1), $($newPos.Y))
+            $moves.Add([MoveVsScore]::new($newPos, 0.5,$removedRookPos,$true,$addedRookPos))
+            return $moves
+        })
     ))
     static [PostMoveEffect]$PostMove = [PostMoveEffect]::new({param($newPosition, $allegiance, $board)return $false},{param($newPosition, $allegiance, $board)},0)
-    
-    #TODO ADD CASTLING?
 }
 
 class Queen : PieceTypeBase
@@ -705,11 +748,23 @@ class Tile
     {
         if($IgnoreCheck -or $this.CheckCanMoveTo($FromPos,$ToPos,$Tiles,$MoveCache))
         {
-            [Position] $killPos = $MoveCache.GetKillPosition($FromPos,$ToPos)
-            if ($killPos -ne $null) {
-                $Tiles[$killPos.X,$killPos.Y].OccupantPiece = $null
-                $Tiles[$killPos.X,$killPos.Y].OccupantAllegiance = [Allegiance]::None
-                $Tiles[$killPos.X,$killPos.Y].OccupantLastMovedTurn = 0
+            [Position] $RemovePosition = [Position]::new(0,0)
+            [bool] $ShouldReplace = $false
+            [Position] $ReplacePosition = [Position]::new(0,0)
+            
+            #If this move causes a replacement - i.e any move that effects more than one tile, such as en passant or castling
+            if ($MoveCache.GetReplacePosition($FromPos,$ToPos,[ref]$RemovePosition,[ref]$ShouldReplace,[ref]$ReplacePosition)) {
+                
+                if($ShouldReplace)
+                {
+                    $Tiles[$ReplacePosition.X, $ReplacePosition.Y].OccupantPiece = $Tiles[$RemovePosition.X, $RemovePosition.Y].OccupantPiece
+                    $Tiles[$ReplacePosition.X, $ReplacePosition.Y].OccupantAllegiance = $Tiles[$RemovePosition.X, $RemovePosition.Y].OccupantAllegiance
+                    $Tiles[$ReplacePosition.X, $ReplacePosition.Y].OccupantLastMovedTurn = $SelectedTurn
+                }
+                
+                $Tiles[$RemovePosition.X, $RemovePosition.Y].OccupantPiece = $null
+                $Tiles[$RemovePosition.X, $RemovePosition.Y].OccupantAllegiance = [Allegiance]::None
+                $Tiles[$RemovePosition.X, $RemovePosition.Y].OccupantLastMovedTurn = 0
             }
             
             #Swap Pieces
@@ -856,7 +911,7 @@ while($continue)
 {
     $currentTurn++
     #Clear-Host
-    $AIDepth = 2#$(If($whitesTurn -or (-not $AiEnabled)) {1} Else {2});
+    $AIDepth = $(If($whitesTurn -or (-not $AiEnabled)) {1} Else {2});
 
     Write-Host $(If($whitesTurn) {"Your Turn (Turn $currentTurn)"} Else {"Enemy Thinking (Turn $currentTurn)..."});
     
@@ -873,7 +928,7 @@ while($continue)
         break;
     }
     
-    if($false)#$whitesTurn -or (-not $AiEnabled))
+    if($whitesTurn -or (-not $AiEnabled))
     {
         while ($true)
         {
