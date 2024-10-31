@@ -30,7 +30,7 @@ class Position {
 
 class MoveVsScore{
     [Position]$MoveTo
-    [int]$ScoreChange
+    [float]$ScoreChange
     [Position]$EnemyRemovePosition
 
     MoveVsScore()
@@ -148,14 +148,14 @@ class PostMoveEffect
 {
     [scriptBlock]$Condition
     [scriptBlock]$Effect
-    [int]$ScoreChangeIfApplied
+    [float]$ScoreChangeIfApplied
 
     PostMoveEffect()
     {
 
     }
 
-    PostMoveEffect([scriptBlock]$nCondition,[scriptBlock]$nEffect,[int]$nScoreChange)
+    PostMoveEffect([scriptBlock]$nCondition,[scriptBlock]$nEffect,[float]$nScoreChange)
     {
         $this.Condition = $nCondition
         $this.Effect = $nEffect
@@ -240,7 +240,7 @@ class MoveCache
                     {
                         
                         $MoveCounter.Value = $MoveCounter.Value + 1
-                        $moveScore = [float]($moveTarget.ScoreChange)
+                        [float]$moveScore = [float]($moveTarget.ScoreChange)
                         $moveScore += $($Tiles[$x,$y].OccupantPiece::PostMove.AddScoreToMove($moveTarget.MoveTo,$PlayerAllegiance,$Tiles))
                         $moveKey = $this.GetMoveKey($CurrentPosition, $moveTarget.MoveTo)
                         
@@ -284,6 +284,7 @@ class MoveCache
         return [float]::MinValue
     }
 
+    #Simulates going one layer deeper into the moves, and checking what the possible results of all player moves would be
     [float] GetDepthScore([Position]$FromPos,[Position]$ToPos,$Tiles,$MoveCache,[Allegiance]$PlayerAllegiance,[Position]$MyKingPos,[ref]$MoveCounter,[int]$SelectedTurn)
     {
         # Create deep copy of board
@@ -301,16 +302,31 @@ class MoveCache
             return 0
         }
 
+        # Find king's actual position after the move
+        [Position]$ActualKingPos = $null
+        For ($y = 0; $y -le 7; $y++) {
+            For ($x = 0; $x -le 7; $x++) {
+                if ($PlayerAllegiance -eq $TilesInstance[$x, $y].OccupantAllegiance -and
+                        $TilesInstance[$x,$y].OccupantPiece -eq [King])
+                {
+                    $ActualKingPos = [Position]::new($x,$y)
+                    break
+                }
+            }
+            if ($ActualKingPos -ne $null) { break }
+        }
+
+        # Check if our king is in check after this move
+        if($this.IsKingInCheck($PlayerAllegiance, $ActualKingPos, $TilesInstance))
+        {
+            return -900
+        }
+
         $CacheInstance = [MoveCache]::new()
         $OpponentAllegiance = $(If($PlayerAllegiance -eq [Allegiance]::White) {[Allegiance]::Black} else {[Allegiance]::White})
         [int]$NewDepth = $this.SearchDepth - 1
         [int]$NewTurn = $SelectedTurn + 1
         $depthScore = $CacheInstance.UpdateCache($OpponentAllegiance, $TilesInstance, $NewDepth,$MoveCounter,$NewTurn )
-        
-        if($this.IsKingInCheck($PlayerAllegiance, $MyKingPos, $TilesInstance))
-        {
-            $depthScore += 200
-        }
         
         return -$depthScore
     }
@@ -484,7 +500,7 @@ class Pawn : PieceTypeBase
             $OppositeAllegiance = $(If($allegiance -eq [Allegiance]::White) {[Allegiance]::Black} Else {[Allegiance]::White})
             $x = $from.X + 1 
             $y = $from.Y + $MovementDirection
-            return $x -lt 8 -and $y -lt 8 -and $board[$x,$y].OccupantAllegiance -eq $OppositeAllegiance
+            return $x -ge 0 -and $x -lt 8 -and $y -ge 0 -and $y -lt 8 -and $board[$x,$y].OccupantAllegiance -eq $OppositeAllegiance
         },
         {
             param($from, $allegiance, $board,[int]$SelectedTurn)
@@ -502,7 +518,7 @@ class Pawn : PieceTypeBase
             $OppositeAllegiance = $(If($allegiance -eq [Allegiance]::White) {[Allegiance]::Black} Else {[Allegiance]::White})
             $x = $from.X - 1
             $y = $from.Y + $MovementDirection
-            return $x -lt 8 -and $y -lt 8 -and $board[$x,$y].OccupantAllegiance -eq $OppositeAllegiance
+            return $x -ge 0 -and $x -lt 8 -and $y -ge 0 -and $y -lt 8 -and $board[$x,$y].OccupantAllegiance -eq $OppositeAllegiance
         },
         {
             param($from, $allegiance, $board,[int]$SelectedTurn)
@@ -841,7 +857,7 @@ while($continue)
 {
     $currentTurn++
     #Clear-Host
-    $AIDepth = $(If($whitesTurn -or (-not $AiEnabled)) {1} Else {2});
+    $AIDepth = 2#$(If($whitesTurn -or (-not $AiEnabled)) {1} Else {2});
 
     Write-Host $(If($whitesTurn) {"Your Turn (Turn $currentTurn)"} Else {"Enemy Thinking (Turn $currentTurn)..."});
     
@@ -858,7 +874,7 @@ while($continue)
         break;
     }
     
-    if($whitesTurn -or (-not $AiEnabled))
+    if($false)#$whitesTurn -or (-not $AiEnabled))
     {
         while ($true)
         {
@@ -924,8 +940,12 @@ while($continue)
         #Current Position
         [Position]$AIcurrentPosition = [Position]::new(0, 0)
         $moveCache.GetAIMove([ref]$AIcurrentPosition,[ref]$AIselectedTarget)
-        Write-Host "AI MOVE FROM $($AIcurrentPosition.X),$($AIcurrentPosition.Y) to $($AIselectedTarget.X),$($AIselectedTarget.Y)"
-        $Grid[$AIcurrentPosition.X, $AIcurrentPosition.Y].MovePiece($AIcurrentPosition, $AIselectedTarget, $Grid, $moveCache,$false,$currentTurn)
+        Write-Host "AI MOVE $($Grid[$AIcurrentPosition.X,$AIcurrentPosition.Y].OccupantPiece) FROM $($AIcurrentPosition.X),$($AIcurrentPosition.Y) to $($AIselectedTarget.X),$($AIselectedTarget.Y)"
+        if (-not $Grid[$AIcurrentPosition.X, $AIcurrentPosition.Y].MovePiece($AIcurrentPosition, $AIselectedTarget, $Grid, $moveCache,$false,$currentTurn))
+        {
+            Write-Host "BAD MOVE" Background-Color [System.ConsoleColor]::DarkRef
+            break
+        }
         $whitesTurn = -not $whitesTurn;
     }
 }
