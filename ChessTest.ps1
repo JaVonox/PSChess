@@ -975,7 +975,7 @@ $IsDebugMode = $false
 $currentTurn = 0
 [System.Collections.Generic.List[Allegiance]]$AiAllegiances = @([Allegiance]::Black)
 
-Clear-Host
+if(-not $IsDebugMode){Clear-Host}
 
 while($true)
 {
@@ -1040,7 +1040,7 @@ while($true)
                     {
                         if ($Grid[$currentPosition.X, $currentPosition.Y].MovePiece($currentPosition, $selectedTarget, $Grid, $moveCache,$false,$currentTurn))
                         {
-                            Clear-Host
+                            if(-not $IsDebugMode){Clear-Host}
                             $whitesTurn = -not $whitesTurn;
                             GenerateMoveText $PlayerAllegiance $($Grid[$currentPosition.X,$currentPosition.Y].OccupantPiece) $currentPosition $selectedTarget
                             
@@ -1078,7 +1078,7 @@ while($true)
             break
         }
 
-        Clear-Host
+        if(-not $IsDebugMode){Clear-Host}
         
         GenerateMoveText $PlayerAllegiance $($Grid[$AIcurrentPosition.X,$AIcurrentPosition.Y].OccupantPiece) $AIcurrentPosition $AIselectedTarget
 
