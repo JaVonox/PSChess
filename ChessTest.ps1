@@ -908,10 +908,27 @@ function DrawGrid([Tile[,]]$Tiles,[ref]$moveCache,[Position]$queryPosition,[Alle
     Write-Host "$(If($ViewerAllegiance -eq [Allegiance]::White) {"Whites Turn"}Else{"Blacks Turn"}) (Turn $currentTurn)"
     
     [bool]$IsMoveQuery = $($queryPosition -ne $null)
-    
-    Write-Host " a b c d e f g h ";
 
-    For ($y = 0; $y -le 7;$y++)
+    Write-Host " a b c d e f g h "
+    
+    $StartY = 0
+    $EndY = 8
+    $YChange = 1
+    
+    If($ViewerAllegiance -eq [Allegiance]::White -or $IsDebugMode)
+    {
+        $StartY = 0
+        $EndY = 8
+        $YChange = 1
+    }
+    else
+    {
+        $StartY = 7
+        $EndY = -1
+        $YChange = -1
+    }
+
+    For ($y = $StartY; $y -ne $EndY;$y+=$YChange)
     {
         Write-Host $([Math]::Abs($y-8)) -NoNewLine
         For ($x = 0; $x -le 7;$x++)
@@ -927,12 +944,13 @@ function DrawGrid([Tile[,]]$Tiles,[ref]$moveCache,[Position]$queryPosition,[Alle
             {
                 $colour = $(If($Tiles[$x,$y].IsWhiteTile){[System.ConsoleColor]::DarkYellow}else{[System.ConsoleColor]::DarkRed})
             }
-            
+
             [System.ConsoleColor]$pieceColour = $(If($Tiles[$x,$y].OccupantAllegiance -eq [Allegiance]::White){[System.ConsoleColor]::White}else{[System.ConsoleColor]::Black})
             Write-Host $output -NoNewLine -BackgroundColor $colour -ForegroundColor $pieceColour
         }
         Write-Host " "
     }
+
 }
 
 
@@ -974,10 +992,6 @@ while($true)
         If($IsDebugMode){Write-Host "Analysed $totalMoves Moves maxScore $maxScore"}
         
         DrawGrid $Grid ([ref]$moveCache) $null $PlayerAllegiance
-    }
-    else
-    {
-        Clear-Host
     }
     
     if($maxScore -eq [float]::MinValue) #If there is no moves left
@@ -1026,10 +1040,12 @@ while($true)
                     {
                         if ($Grid[$currentPosition.X, $currentPosition.Y].MovePiece($currentPosition, $selectedTarget, $Grid, $moveCache,$false,$currentTurn))
                         {
+                            Clear-Host
                             $whitesTurn = -not $whitesTurn;
                             GenerateMoveText $PlayerAllegiance $($Grid[$currentPosition.X,$currentPosition.Y].OccupantPiece) $currentPosition $selectedTarget
                             
                             [Allegiance]$EnemyAllegiance = $(If($whitesTurn){[Allegiance]::White}else{[Allegiance]::Black})
+                            
                             
                             If($AiAllegiances.Contains($EnemyAllegiance))
                             {
@@ -1061,6 +1077,8 @@ while($true)
             Write-Host "BAD MOVE" Background-Color [System.ConsoleColor]::DarkRed
             break
         }
+
+        Clear-Host
         
         GenerateMoveText $PlayerAllegiance $($Grid[$AIcurrentPosition.X,$AIcurrentPosition.Y].OccupantPiece) $AIcurrentPosition $AIselectedTarget
 
@@ -1070,5 +1088,6 @@ while($true)
             break
         }
         $whitesTurn = -not $whitesTurn;
+        
     }
 }
