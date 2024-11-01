@@ -218,20 +218,9 @@ class MoveCache
         [System.Collections.Generic.List[string]]$BestMoves = [System.Collections.Generic.List[string]]::new()
         [float]$BestMoveScore = [float]::MinValue
         [float]$CumulativeScore = 0
-        [Position] $KingPosition = $null
         
         $this.cachedMoves.Clear()
         $this.AIMove = ""
-
-        For ($y = 0; $y -le 7 -and $KingPosition -eq $null; $y++) {
-            For ($x = 0; $x -le 7; $x++) {
-                if ($PlayerAllegiance -eq $Tiles[$x, $y].OccupantAllegiance -and $Tiles[$x,$y].OccupantPiece -eq [King])
-                {
-                    $KingPosition = [Position]::new($x,$y)
-                    break;
-                }
-            }
-        }
 
         For ($y = 0; $y -le 7; $y++) {
             For ($x = 0; $x -le 7; $x++) {
@@ -252,7 +241,7 @@ class MoveCache
                         #If we have another search depth to go, append a depth score
                         if ($this.SearchDepth -gt 0)
                         {
-                            $moveScore += $this.GetDepthScore($CurrentPosition, $moveTarget.MoveTo, $Tiles, $this, $PlayerAllegiance,$KingPosition, $MoveCounter,$SelectedTurn)
+                            $moveScore += $this.GetDepthScore($CurrentPosition, $moveTarget.MoveTo, $Tiles, $this, $PlayerAllegiance, $MoveCounter,$SelectedTurn)
                         }
                         
                         if($moveScore -lt -600) 
@@ -287,7 +276,7 @@ class MoveCache
     }
 
     #Simulates going one layer deeper into the moves, and checking what the possible results of all player moves would be
-    [float] GetDepthScore([Position]$FromPos,[Position]$ToPos,$Tiles,$MoveCache,[Allegiance]$PlayerAllegiance,[Position]$MyKingPos,[ref]$MoveCounter,[int]$SelectedTurn)
+    [float] GetDepthScore([Position]$FromPos,[Position]$ToPos,$Tiles,$MoveCache,[Allegiance]$PlayerAllegiance,[ref]$MoveCounter,[int]$SelectedTurn)
     {
         # Create deep copy of board
         $TilesInstance = New-Object 'Tile[,]' 8,8
@@ -902,7 +891,7 @@ function GenerateMoveText([Allegiance]$CurrentPlayerAllegiance,[System.Type]$Mov
     Write-Host $TmpMoveName
 }
 
-function DrawGrid([Tile[,]]$Tiles,[ref]$moveCache,[Position]$queryPosition,[Allegiance]$ViewerAllegiance)
+function DrawGrid([Tile[,]]$Tiles,[ref]$moveCache,[bool]$WKinCheck,[bool]$BKinCheck,[Position]$queryPosition,[Allegiance]$ViewerAllegiance)
 {
     Write-Host "$(If($ViewerAllegiance -eq [Allegiance]::White) {"Whites Turn"}Else{"Blacks Turn"}) (Turn $currentTurn)"
     
@@ -944,9 +933,9 @@ function DrawGrid([Tile[,]]$Tiles,[ref]$moveCache,[Position]$queryPosition,[Alle
                 $colour = $(If($Tiles[$x,$y].IsWhiteTile){[System.ConsoleColor]::DarkYellow}else{[System.ConsoleColor]::DarkRed})
             }
             
-            if($Tiles[$x,$y].OccupantAllegiance -ne [Allegiance]::None -and $Tiles[$x,$y].OccupantPiece -eq [King])
+            if(($WKinCheck -or $BKinCheck) -and $Tiles[$x,$y].OccupantPiece -eq [King])
             {
-                if($moveCache.Value.IsPositionAttacked($($Tiles[$x,$y].OccupantAllegiance),[Position]::new($x,$y),$Tiles))
+                if(($WKinCheck -and $Tiles[$x,$y].OccupantAllegiance -eq [Allegiance]::White) -or ($BKinCheck -and $Tiles[$x,$y].OccupantAllegiance -eq [Allegiance]::Black))
                 {
                     $colour = [System.ConsoleColor]::DarkMagenta
                 }
@@ -960,18 +949,9 @@ function DrawGrid([Tile[,]]$Tiles,[ref]$moveCache,[Position]$queryPosition,[Alle
 
 }
 
-
-
 [Tile[,]]$Grid = New-Object 'Tile[,]' 8,8
 
-[scriptBlock]$NewPattern
-
-switch($boardType)
-{
-    {$null -eq $_ -or $_ -eq ''} { $NewPattern = {param($x,$y) return [int]($y -eq 1 -or $y -eq 8) * $(If($x -le 5) {$x} Else {8-$x+1}) + ([int]($y -eq 2 -or $y -eq 7) * 6) - 1};break; }
-    "C1" {$NewPattern = {param($x,$y) return ([int]($y -eq 1 -and $x -eq 8) * 5 + [int]($y -eq 7 -and $x -eq 2) * 5 + [int]($y -eq 1 -and $x -eq 1) * 1 + [int]($y -eq 1 -and $x -eq 3) * 1 + [int]($y -eq 2 -and $x -eq 7) * 4) - 1}; break; }
-    "C2" { $NewPattern = {param($x,$y) return ([int]($y -eq 1 -and $x -eq 5) * 5 + [int]($y -eq 7 -and $x -eq 8) * 5 + [int]($y -eq 2 -and $x -eq 6) * 2 + [int]($y -eq 2 -and $x -eq 8) * 4 + [int]($y -eq 7 -and ($x -eq 6 -or $x -eq 7)) * 6) - 1}; break; }
-}
+[scriptBlock]$NewPattern = {param($x,$y) return [int]($y -eq 1 -or $y -eq 8) * $(If($x -le 5) {$x} Else {8-$x+1}) + ([int]($y -eq 2 -or $y -eq 7) * 6) - 1};
 
 GenerateBaseGrid $Grid $NewPattern
 $moveCache = [MoveCache]::new()
@@ -1011,18 +991,51 @@ while($true)
     $totalMoves = 0
     $maxScore = $moveCache.UpdateCache($PlayerAllegiance,$Grid,$AIDepth,[ref]$totalMoves,$currentTurn)
 
+    $WhiteKingInCheck = $false
+    $BlackKingInCheck = $false
+    $AmountSet = 0
+
+    For ($y = 0; $y -le 7 -and $AmountSet -lt 2; $y++) {
+        For ($x = 0; $x -le 7 -and $AmountSet -lt 2; $x++) {
+            if ($Grid[$x,$y].OccupantPiece -eq [King])
+            {
+                if ($Grid[$x, $y].OccupantAllegiance -eq [Allegiance]::White)
+                {
+                    $WhiteKingInCheck = $moveCache.IsPositionAttacked($($Grid[$x, $y].OccupantAllegiance),[Position]::new($x, $y), $Grid)
+                    $AmountSet++
+                }
+                else
+                {
+                    $BlackKingInCheck = $moveCache.IsPositionAttacked($($Grid[$x, $y].OccupantAllegiance),[Position]::new($x, $y), $Grid)
+                    $AmountSet++
+                }
+            }
+        }
+    }
+
     if((-not $IsAI) -or $IsDebugMode)
     {
         If($IsDebugMode){Write-Host "Analysed $totalMoves Moves maxScore $maxScore"}
         
-        DrawGrid $Grid ([ref]$moveCache) $null $PlayerAllegiance
+        DrawGrid $Grid ([ref]$moveCache) $WhiteKingInCheck $BlackKingInCheck $null $PlayerAllegiance
     }
     
     if($maxScore -eq [float]::MinValue) #If there is no moves left
     {
-        $winner = $(If($whitesTurn){"Black"}else{"White"})
-        Write-Host "Checkmate. $winner Wins!"
-        break;
+        If($whitesTurn -and $WhiteKingInCheck)
+        {
+            Write-Host "Checkmate. Black Wins!"
+        }
+        elseif((-not $whitesTurn) -and $BlackKingInCheck)
+        {
+            Write-Host "Checkmate. White Wins!"
+        }
+        else
+        {
+            Write-Host "Draw"
+        }
+        
+        break
     }
     
     if(-not $IsAI)
@@ -1057,7 +1070,7 @@ while($true)
                     if ($IsMoveQuery -and $Grid[$currentPosition.X, $currentPosition.Y].OccupantAllegiance -eq $( If ($whitesTurn) {[Allegiance]::White } else {[Allegiance]::Black } ))
                     {
                         if(-not $IsDebugMode){Clear-Host}
-                        DrawGrid $Grid ([ref]$moveCache) $currentPosition $PlayerAllegiance
+                        DrawGrid $Grid ([ref]$moveCache) $WhiteKingInCheck $BlackKingInCheck $currentPosition $PlayerAllegiance
                         Write-Host "Piece: $($Grid[$currentPosition.X,$currentPosition.Y].OccupantAllegiance) $($Grid[$currentPosition.X,$currentPosition.Y].OccupantPiece) (Last Moved Turn: $($Grid[$currentPosition.X,$currentPosition.Y].OccupantLastMovedTurn))"
                     }
                     else
